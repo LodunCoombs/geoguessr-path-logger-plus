@@ -1,0 +1,17 @@
+{
+  "name": "geoguessr-path-logger-plus",
+  "version": "1.0.0",
+  "description": "",
+  "main": "pathLogger.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "vite": "^7.3.1",
+    "vite-plugin-monkey": "^7.1.9"
+  }
+}
