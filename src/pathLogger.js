@@ -1,5 +1,6 @@
 // --- PART 0: UTILITIES ---
 // Maybe runAsClient isn't needed. Since we have grant: none, it runs natively anyway. console.log(window) outputs the real window
+let hello;
 function runAsClient(f) {
   // Maybe we shouldn't use var
   var s = document.createElement("script");
