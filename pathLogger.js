@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         GeoGuessr Path Logger Plus
 // @namespace    Odinman9847
-// @version      1.0.2
+// @version      1.1.0
 // @description  The 2026 Path Logger Upgrade. Now with duels support, customization, gradients, RDP smoothing, fixed bugs, and more.
 // @author       Odinman9847 (Original script by xsanda)
-// @copyright    2026, Odinman9847; 2021, xsanda;
+// @copyright    2026, Odinman9847;
 // @run-at       document-start
 // @grant        none
 // @license      MIT
@@ -24,9 +24,6 @@ function runAsClient(f) {
 // --- PART 1: IMMEDIATE EXECUTION (Network & UI) ---
 (function() {
     'use strict';
-    // alert('[PathLogger] SCRIPT LOADED'); // Uncomment this if console logs still don't show up
-
-
     console.log('[PathLogger] Script Part 1: Immediate Execution started');
     runAsClient(() => {
         console.log('[PathLogger] runAsClient (Part 1) executing');
@@ -486,36 +483,94 @@ runAsClient(() => {
         }
     }
 
-    const tryHijack = () => {
-        if (window.__GPL_HIJACKED) return true;
-        const google = window.google;
-        if (!google || !google.maps || !google.maps.Map || !google.maps.StreetViewPanorama) return false;
+    // --- ROBUST PROTOTYPE INTERCEPTION (Zero-Poller) ---
+    const interceptConstructors = (mapsObj) => {
+        let _Map = mapsObj.Map;
+        let _StreetViewPanorama = mapsObj.StreetViewPanorama;
+        let _mapHijacked = false;
+        let _svHijacked = false;
 
-        console.log('[PathLogger] Hijacking Google Maps constructors...');
-        const oldSV = google.maps.StreetViewPanorama;
-        google.maps.StreetViewPanorama = Object.assign(function (...args) {
-            console.log('[PathLogger] StreetViewPanorama constructed!');
-            const res = oldSV.apply(this, args);
-            this.addListener('position_changed', () => onMove(this));
-            return res;
-        }, { prototype: Object.create(oldSV.prototype) });
+        const checkComplete = () => {
+            if (_mapHijacked && _svHijacked) {
+                window.__GPL_HIJACKED = true;
+                console.log('[PathLogger] Hijack complete. (Zero-Poller Strategy)');
+            }
+        };
 
-        const oldMap = google.maps.Map;
-        google.maps.Map = Object.assign(function (...args) {
-            console.log('[PathLogger] Map constructed!');
-            const res = oldMap.apply(this, args);
-            this.addListener('idle', () => onMapUpdate(this));
-            return res;
-        }, { prototype: Object.create(oldMap.prototype) });
-        
-        console.log('[PathLogger] Hijack complete.');
-        window.__GPL_HIJACKED = true;
-        return true;
+        const hijackBlueprint = (constructor, isSV) => {
+            return Object.assign(function (...args) {
+                console.log(`[PathLogger] ${isSV ? 'StreetViewPanorama' : 'Map'} constructed!`);
+                const res = constructor.apply(this, args);
+                if (isSV) {
+                    this.addListener('position_changed', () => onMove(this));
+                } else {
+                    this.addListener('idle', () => onMapUpdate(this));
+                }
+                return res;
+            }, { prototype: Object.create(constructor.prototype) });
+        };
+
+        Object.defineProperty(mapsObj, 'Map', {
+            get: () => _Map,
+            set: (val) => {
+                if (!val || _mapHijacked) { _Map = val; return; }
+                console.log('[PathLogger] Trapped Map constructor instantiation!');
+                _Map = hijackBlueprint(val, false);
+                _mapHijacked = true;
+                checkComplete();
+            },
+            configurable: true,
+            enumerable: true
+        });
+        if (_Map && !_mapHijacked) mapsObj.Map = _Map; // Self-trigger if already defined
+
+        Object.defineProperty(mapsObj, 'StreetViewPanorama', {
+            get: () => _StreetViewPanorama,
+            set: (val) => {
+                if (!val || _svHijacked) { _StreetViewPanorama = val; return; }
+                console.log('[PathLogger] Trapped StreetViewPanorama constructor instantiation!');
+                _StreetViewPanorama = hijackBlueprint(val, true);
+                _svHijacked = true;
+                checkComplete();
+            },
+            configurable: true,
+            enumerable: true
+        });
+        if (_StreetViewPanorama && !_svHijacked) mapsObj.StreetViewPanorama = _StreetViewPanorama; // Self-trigger
     };
 
-    if (!tryHijack()) {
-        const hijackInterval = setInterval(() => {
-            if (tryHijack()) clearInterval(hijackInterval);
-        }, 10);
-    }
+    const interceptMaps = (googleObj) => {
+        let _maps = googleObj.maps;
+
+        Object.defineProperty(googleObj, 'maps', {
+            get: () => _maps,
+            set: (val) => {
+                _maps = val;
+                if (_maps && !window.__GPL_HIJACKED) interceptConstructors(_maps);
+            },
+            configurable: true,
+            enumerable: true
+        });
+        if (_maps && !window.__GPL_HIJACKED) interceptConstructors(_maps);
+    };
+
+    const setupInterceptor = () => {
+        if (window.__GPL_HIJACKED) return;
+        let _google = window.google;
+
+        Object.defineProperty(window, 'google', {
+            get: () => _google,
+            set: (val) => {
+                _google = val;
+                if (_google && !window.__GPL_HIJACKED) interceptMaps(_google);
+            },
+            configurable: true,
+            enumerable: true
+        });
+        if (_google && !window.__GPL_HIJACKED) interceptMaps(_google);
+        console.log('[PathLogger] Setup active property traps for Google Maps instantiation.');
+    };
+
+    // Begin trapping immediately!
+    setupInterceptor();
 }); // closes runAsClient
