@@ -5,21 +5,31 @@
 // @description  The 2026 Path Logger Upgrade. Now with duels support, customization, gradients, RDP smoothing, fixed bugs, and more.
 // @author       Odinman9847 (Original script by xsanda)
 // @copyright    2026, Odinman9847; 2021, xsanda;
-// @match        https://www.geoguessr.com/*
-// @require      https://openuserjs.org/src/libs/xsanda/Run_code_as_client.js
-// @require      https://openuserjs.org/src/libs/xsanda/Google_Maps_Promise.js
 // @run-at       document-start
 // @grant        none
 // @license      MIT
+// @match        https://www.geoguessr.com/*
 // @downloadURL https://update.greasyfork.org/scripts/564743/GeoGuessr%20Path%20Logger%20Plus.user.js
 // @updateURL https://update.greasyfork.org/scripts/564743/GeoGuessr%20Path%20Logger%20Plus.meta.js
 // ==/UserScript==
 
+// --- PART 0: UTILITIES ---
+function runAsClient(f) {
+    var s = document.createElement("script");
+    s.type = "text/javascript";
+    s.text = "(async () => { try { await (" + f.toString() + ")(); } catch (e) { console.error('[PathLogger] runAsClient error:', e); }})();";
+    document.head.appendChild(s);
+}
+
 // --- PART 1: IMMEDIATE EXECUTION (Network & UI) ---
 (function() {
     'use strict';
+    // alert('[PathLogger] SCRIPT LOADED'); // Uncomment this if console logs still don't show up
 
+
+    console.log('[PathLogger] Script Part 1: Immediate Execution started');
     runAsClient(() => {
+        console.log('[PathLogger] runAsClient (Part 1) executing');
         window.__GPL_GAME_ID = null;
         window.__GPL_HAS_GUESSED = false;
 
@@ -107,7 +117,7 @@
         #pl-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(8px); z-index: 99999; display: none; justify-content: center; align-items: center; padding: 20px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
         #pl-modal { background-color: var(--pl-bg-modal); width: 100%; max-width: 550px; max-height: 90vh; border-radius: 20px; border: 1px solid var(--pl-border); color: var(--pl-text); box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; animation: pl-fade-in 0.2s ease-out; overflow: hidden; }
         @keyframes pl-fade-in { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
-        .pl-header { padding: 20px 24px; border-bottom: 1px solid var(--pl-border); flex-shrink: 0; }
+        upl-header { padding: 20px 24px; border-bottom: 1px solid var(--pl-border); flex-shrink: 0; }
         .pl-header h2 { margin: 0; font-size: 20px; font-weight: 700; }
         .pl-header p { margin: 4px 0 0 0; color: var(--pl-dim); font-size: 13px; }
         .pl-content { padding: 20px 24px; display: flex; flex-direction: column; gap: 20px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--pl-bg-accent) transparent; }
@@ -258,9 +268,11 @@
 })();
 
 
+
 // --- PART 2: MAP LOGIC (DEFERRED) ---
-googleMapsPromise.then(() => runAsClient(() => {
-    const google = window.google;
+console.log('[PathLogger] Script Part 2: Initializing robust map hook...');
+runAsClient(() => {
+    console.log('[PathLogger] runAsClient (Part 2) executing');
     const SETTINGS_KEY = 'pl_settings_v2';
     const RDP_EPSILON = 0.00002;
     const TELEPORT_DISTANCE = 120;
@@ -368,9 +380,11 @@ googleMapsPromise.then(() => runAsClient(() => {
     };
 
     const onMove = (sv) => {
+        console.log('[PathLogger] onMove triggered from Panorama');
         if (!getSettings().enabled || !isGamePage()) return;
 
         const pos = { lat: sv.position.lat(), lng: sv.position.lng() };
+        console.log('[PathLogger] onMove at:', pos.lat.toFixed(5), pos.lng.toFixed(5));
 
         // 1. Result visible? ALWAYS update spawn buffer and reset guess flag.
         if (resultShown()) {
@@ -384,6 +398,7 @@ googleMapsPromise.then(() => runAsClient(() => {
 
         // 3. Start Recording Logic
         if (!inGame) {
+            console.log('[PathLogger] Recording started for new round/game');
             inGame = true;
             // Use buffered spawn point as point 0
             route = lastObservedSpawn ? [[lastObservedSpawn]] : [[]];
@@ -400,7 +415,9 @@ googleMapsPromise.then(() => runAsClient(() => {
     };
 
     const onMapUpdate = (map) => {
-        if (!isGamePage() || !google.maps.geometry) return;
+        const google = window.google;
+        console.log('[PathLogger] map idle event triggered');
+        if (!isGamePage() || !google || !google.maps || !google.maps.geometry) return;
 
         // Add Round Number to checksum to handle persistent Duel pages
         const newState = (inGame ? 5 : 0) + (resultShown() ? 10 : 0) + (isGameFinished() ? 20 : 0) + getRoundNumber();
@@ -469,17 +486,36 @@ googleMapsPromise.then(() => runAsClient(() => {
         }
     }
 
-    const oldSV = google.maps.StreetViewPanorama;
-    google.maps.StreetViewPanorama = Object.assign(function (...args) {
-        const res = oldSV.apply(this, args);
-        this.addListener('position_changed', () => onMove(this));
-        return res;
-    }, { prototype: Object.create(oldSV.prototype) });
+    const tryHijack = () => {
+        if (window.__GPL_HIJACKED) return true;
+        const google = window.google;
+        if (!google || !google.maps || !google.maps.Map || !google.maps.StreetViewPanorama) return false;
 
-    const oldMap = google.maps.Map;
-    google.maps.Map = Object.assign(function (...args) {
-        const res = oldMap.apply(this, args);
-        this.addListener('idle', () => onMapUpdate(this));
-        return res;
-    }, { prototype: Object.create(oldMap.prototype) });
-}));
+        console.log('[PathLogger] Hijacking Google Maps constructors...');
+        const oldSV = google.maps.StreetViewPanorama;
+        google.maps.StreetViewPanorama = Object.assign(function (...args) {
+            console.log('[PathLogger] StreetViewPanorama constructed!');
+            const res = oldSV.apply(this, args);
+            this.addListener('position_changed', () => onMove(this));
+            return res;
+        }, { prototype: Object.create(oldSV.prototype) });
+
+        const oldMap = google.maps.Map;
+        google.maps.Map = Object.assign(function (...args) {
+            console.log('[PathLogger] Map constructed!');
+            const res = oldMap.apply(this, args);
+            this.addListener('idle', () => onMapUpdate(this));
+            return res;
+        }, { prototype: Object.create(oldMap.prototype) });
+        
+        console.log('[PathLogger] Hijack complete.');
+        window.__GPL_HIJACKED = true;
+        return true;
+    };
+
+    if (!tryHijack()) {
+        const hijackInterval = setInterval(() => {
+            if (tryHijack()) clearInterval(hijackInterval);
+        }, 10);
+    }
+}); // closes runAsClient
