@@ -1,15 +1,21 @@
-// --- PART 0: UTILITIES ---
-// Maybe runAsClient isn't needed. Since we have grant: none, it runs natively anyway. console.log(window) outputs the real window
-let hello;
-function runAsClient(f) {
-  // Maybe we shouldn't use var
-  var s = document.createElement("script");
-  s.type = "text/javascript";
-  s.text =
+function runAsClient(func: () => void): void {
+  const scriptElement = document.createElement("script");
+  scriptElement.type = "text/javascript";
+  scriptElement.text =
     "(async () => { try { await (" +
-    f.toString() +
+    func.toString() +
     ")(); } catch (e) { console.error('[PathLogger] runAsClient error:', e); }})();";
-  document.head.appendChild(s);
+  document.head.appendChild(scriptElement);
+}
+
+interface AppState {
+  enabled: boolean;
+  style: string;
+  solidColor: string;
+  gradStart: string;
+  gradMiddle: string;
+  gradEnd: string;
+  thickness: number;
 }
 
 // --- PART 1: IMMEDIATE EXECUTION (Network & UI) ---
@@ -21,9 +27,10 @@ function runAsClient(f) {
     window.__GPL_GAME_ID = null;
     window.__GPL_HAS_GUESSED = false;
 
-    const checkURL = (url) => {
+    const checkURL = (url: string | URL | undefined): void => {
       if (typeof url !== "string") return;
       if (url.includes("/api/lobby/") && url.includes("/join")) {
+        // Can potentially be cleaner with destructuring or optional chaining
         const match = url.match(/\/api\/lobby\/([0-9a-f]{24})\/join/);
         if (match && match[1]) {
           window.__GPL_GAME_ID = match[1];
@@ -36,20 +43,26 @@ function runAsClient(f) {
     };
 
     const originalFetch = window.fetch;
-    window.fetch = function (...args) {
+    window.fetch = function (this: typeof window, ...args: any[]) {
       if (args[0]) checkURL(args[0]);
-      return originalFetch.apply(this, args);
+      return originalFetch.apply(
+        this,
+        args as [RequestInfo | URL, RequestInit | undefined],
+      );
     };
 
     const originalOpen = XMLHttpRequest.prototype.open;
-    XMLHttpRequest.prototype.open = function (method, url) {
-      checkURL(url);
-      return originalOpen.apply(this, arguments);
+    XMLHttpRequest.prototype.open = function (
+      this: XMLHttpRequest,
+      ...args: any[]
+    ) {
+      checkURL(args[1]);
+      return (originalOpen as any).apply(this, args);
     };
   });
 
   const SETTINGS_KEY = "pl_settings_v2";
-  let state = {
+  let state: AppState = {
     enabled: true,
     style: "gradient",
     solidColor: "#ff0000",
@@ -68,18 +81,18 @@ function runAsClient(f) {
   }
   loadSettings();
 
-  function uiHexToHsl(hex) {
-    let r = parseInt(hex.slice(1, 3), 16) / 255,
-      g = parseInt(hex.slice(3, 5), 16) / 255,
-      b = parseInt(hex.slice(5, 7), 16) / 255;
-    let max = Math.max(r, g, b),
-      min = Math.min(r, g, b),
-      h,
-      s,
-      l = (max + min) / 2;
-    if (max === min) h = s = 0;
-    else {
-      let d = max - min;
+  // Do we need both HexToHsl and HslToHex? Can we just use one?
+  function uiHexToHsl(hex: string) {
+    const r = parseInt(hex.slice(1, 3), 16) / 255;
+    const g = parseInt(hex.slice(3, 5), 16) / 255;
+    const b = parseInt(hex.slice(5, 7), 16) / 255;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    let h = 0;
+    let s = 0;
+    const l = (max + min) / 2;
+    if (max !== min) {
+      const d = max - min;
       s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
       switch (max) {
         case r:
@@ -96,11 +109,11 @@ function runAsClient(f) {
     }
     return { h: h * 360, s: s * 100, l: l * 100 };
   }
-  const uiHslToHex = (h, s, l) => {
+  const uiHslToHex = (h: number, s: number, l: number): string => {
     l /= 100;
     s /= 100;
     const a = s * Math.min(l, 1 - l);
-    const f = (n) => {
+    const f = (n: number) => {
       const k = (n + h / 30) % 12;
       const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
       return Math.round(255 * color)
@@ -109,11 +122,12 @@ function runAsClient(f) {
     };
     return `#${f(0)}${f(8)}${f(4)}`;
   };
-  const uiInterpolateHSL = (c1, c2, t) => {
-    const h1 = uiHexToHsl(c1),
-      h2 = uiHexToHsl(c2);
-    let hue1 = h1.h,
-      hue2 = h2.h;
+  // Returns a hex color that is t% of the way between c1 and c2
+  const uiInterpolateHSL = (c1: string, c2: string, t: number): string => {
+    const h1 = uiHexToHsl(c1);
+    const h2 = uiHexToHsl(c2);
+    let hue1 = h1.h;
+    let hue2 = h2.h;
     if (hue2 - hue1 > 180) hue1 += 360;
     else if (hue2 - hue1 < -180) hue2 += 360;
     return uiHslToHex(
@@ -123,7 +137,14 @@ function runAsClient(f) {
     );
   };
 
-  const presets = [
+  interface Preset {
+    name: string;
+    start: string;
+    middle: string;
+    end: string;
+  }
+
+  const presets: Preset[] = [
     {
       name: "The Classic",
       start: "#22c55e",
@@ -138,12 +159,14 @@ function runAsClient(f) {
   ];
 
   const style = document.createElement("style");
+  // All this HTML/CSS in JS is pretty verbose, maybe we can extract this into a component.
+  // We could probably even write a css file and import it, since using Vite to build.
   style.innerHTML = `
         :root { --pl-bg-modal: #1e1b3a; --pl-bg-accent: #2a2650; --pl-bg-hover: #332d5c; --pl-blue: #3b82f6; --pl-blue-hover: #2563eb; --pl-text: #ffffff; --pl-dim: #9ca3af; --pl-border: #2a2650; }
         #pl-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(8px); z-index: 99999; display: none; justify-content: center; align-items: center; padding: 20px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
         #pl-modal { background-color: var(--pl-bg-modal); width: 100%; max-width: 550px; max-height: 90vh; border-radius: 20px; border: 1px solid var(--pl-border); color: var(--pl-text); box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; animation: pl-fade-in 0.2s ease-out; overflow: hidden; }
         @keyframes pl-fade-in { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
-        upl-header { padding: 20px 24px; border-bottom: 1px solid var(--pl-border); flex-shrink: 0; }
+        .pl-header { padding: 20px 24px; border-bottom: 1px solid var(--pl-border); flex-shrink: 0; }
         .pl-header h2 { margin: 0; font-size: 20px; font-weight: 700; }
         .pl-header p { margin: 4px 0 0 0; color: var(--pl-dim); font-size: 13px; }
         .pl-content { padding: 20px 24px; display: flex; flex-direction: column; gap: 20px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--pl-bg-accent) transparent; }
@@ -186,6 +209,7 @@ function runAsClient(f) {
   document.head.appendChild(style);
 
   const backdrop = document.createElement("div");
+  // What's the id for?
   backdrop.id = "pl-backdrop";
   backdrop.innerHTML = `
         <div id="pl-modal">
@@ -215,58 +239,74 @@ function runAsClient(f) {
     `;
 
   function updateUI() {
-    document
-      .getElementById("pl-solid-ui")
-      .classList.toggle("pl-hidden", state.style === "gradient");
-    document
-      .getElementById("pl-grad-ui")
-      .classList.toggle("pl-hidden", state.style === "solid");
-    document
-      .getElementById("pl-style-solid")
-      .classList.toggle("active", state.style === "solid");
-    document
-      .getElementById("pl-style-grad")
-      .classList.toggle("active", state.style === "gradient");
-    document.getElementById("pl-swatch-start").style.backgroundColor =
-      state.gradStart;
-    document.getElementById("pl-swatch-mid").style.backgroundColor =
-      state.gradMiddle;
-    document.getElementById("pl-swatch-end").style.backgroundColor =
-      state.gradEnd;
-    document.getElementById("pl-swatch-solid").style.backgroundColor =
-      state.solidColor;
-    document.getElementById("pl-pick-start").value = state.gradStart;
-    document.getElementById("pl-pick-mid").value = state.gradMiddle;
-    document.getElementById("pl-pick-end").value = state.gradEnd;
-    document.getElementById("pl-pick-solid").value = state.solidColor;
+    const solidUI = document.getElementById("pl-solid-ui");
+    const gradUI = document.getElementById("pl-grad-ui");
+    const styleSolid = document.getElementById("pl-style-solid");
+    const styleGrad = document.getElementById("pl-style-grad");
+    const swatchStart = document.getElementById("pl-swatch-start");
+    const swatchMid = document.getElementById("pl-swatch-mid");
+    const swatchEnd = document.getElementById("pl-swatch-end");
+    const swatchSolid = document.getElementById("pl-swatch-solid");
+    const pickStart = document.getElementById(
+      "pl-pick-start",
+    ) as HTMLInputElement;
+    const pickMid = document.getElementById("pl-pick-mid") as HTMLInputElement;
+    const pickEnd = document.getElementById("pl-pick-end") as HTMLInputElement;
+    const pickSolid = document.getElementById(
+      "pl-pick-solid",
+    ) as HTMLInputElement;
+    const gradBar = document.getElementById("pl-grad-bar");
+    const thickVal = document.getElementById("pl-thick-val");
+    const svgPath = document.getElementById("pl-svg-path");
+
+    if (solidUI)
+      solidUI.classList.toggle("pl-hidden", state.style === "gradient");
+    if (gradUI) gradUI.classList.toggle("pl-hidden", state.style === "solid");
+    if (styleSolid)
+      styleSolid.classList.toggle("active", state.style === "solid");
+    if (styleGrad)
+      styleGrad.classList.toggle("active", state.style === "gradient");
+
+    if (swatchStart) swatchStart.style.backgroundColor = state.gradStart;
+    if (swatchMid) swatchMid.style.backgroundColor = state.gradMiddle;
+    if (swatchEnd) swatchEnd.style.backgroundColor = state.gradEnd;
+    if (swatchSolid) swatchSolid.style.backgroundColor = state.solidColor;
+
+    if (pickStart) pickStart.value = state.gradStart;
+    if (pickMid) pickMid.value = state.gradMiddle;
+    if (pickEnd) pickEnd.value = state.gradEnd;
+    if (pickSolid) pickSolid.value = state.solidColor;
 
     let gradStr = "linear-gradient(to right, ";
     const svgGrad = document.getElementById("pl-svg-grad");
-    svgGrad.innerHTML = "";
-    for (let i = 0; i <= 40; i++) {
-      const t = i / 40;
-      const color =
-        t < 0.5
-          ? uiInterpolateHSL(state.gradStart, state.gradMiddle, t * 2)
-          : uiInterpolateHSL(state.gradMiddle, state.gradEnd, (t - 0.5) * 2);
-      const pos = (t * 100).toFixed(1) + "%";
-      gradStr += `${color} ${pos}${i < 40 ? ", " : ")"}`;
-      const stop = document.createElementNS(
-        "http://www.w3.org/2000/svg",
-        "stop",
-      );
-      stop.setAttribute("offset", pos);
-      stop.setAttribute("stop-color", color);
-      svgGrad.appendChild(stop);
+    if (svgGrad) {
+      svgGrad.innerHTML = "";
+      for (let i = 0; i <= 40; i++) {
+        const t = i / 40;
+        const color =
+          t < 0.5
+            ? uiInterpolateHSL(state.gradStart, state.gradMiddle, t * 2)
+            : uiInterpolateHSL(state.gradMiddle, state.gradEnd, (t - 0.5) * 2);
+        const pos = (t * 100).toFixed(1) + "%";
+        gradStr += `${color} ${pos}${i < 40 ? ", " : ")"}`;
+        const stop = document.createElementNS(
+          "http://www.w3.org/2000/svg",
+          "stop",
+        );
+        stop.setAttribute("offset", pos);
+        stop.setAttribute("stop-color", color);
+        svgGrad.appendChild(stop);
+      }
     }
-    document.getElementById("pl-grad-bar").style.background = gradStr;
-    document.getElementById("pl-thick-val").innerText = state.thickness + "px";
-    const path = document.getElementById("pl-svg-path");
-    path.setAttribute("stroke-width", state.thickness);
-    path.setAttribute(
-      "stroke",
-      state.style === "solid" ? state.solidColor : "url(#pl-svg-grad)",
-    );
+    if (gradBar) gradBar.style.background = gradStr;
+    if (thickVal) thickVal.innerText = state.thickness + "px";
+    if (svgPath) {
+      svgPath.setAttribute("stroke-width", state.thickness.toString());
+      svgPath.setAttribute(
+        "stroke",
+        state.style === "solid" ? state.solidColor : "url(#pl-svg-grad)",
+      );
+    }
     saveSettings();
   }
 
@@ -281,59 +321,102 @@ function runAsClient(f) {
   const injectUI = () => {
     if (!document.getElementById("pl-backdrop"))
       document.body.appendChild(backdrop);
-    document.getElementById("pl-presets").innerHTML = presets
-      .map(
-        (p) => `
-            <button class="pl-preset" data-s="${p.start}" data-m="${p.middle}" data-e="${p.end}">
-                <div class="pl-preset-bar" style="background:linear-gradient(to right, ${p.start}, ${p.middle}, ${p.end})"></div>
-                <span>${p.name}</span>
-            </button>
-        `,
-      )
-      .join("");
-    document.querySelectorAll(".pl-preset").forEach(
+    const presetContainer = document.getElementById("pl-presets");
+    if (presetContainer) {
+      presetContainer.innerHTML = presets
+        .map(
+          (p) => `
+              <button class="pl-preset" data-s="${p.start}" data-m="${p.middle}" data-e="${p.end}">
+                  <div class="pl-preset-bar" style="background:linear-gradient(to right, ${p.start}, ${p.middle}, ${p.end})"></div>
+                  <span>${p.name}</span>
+              </button>
+          `,
+        )
+        .join("");
+    }
+    document.querySelectorAll<HTMLButtonElement>(".pl-preset").forEach(
       (b) =>
         (b.onclick = () => {
-          state.gradStart = b.dataset.s;
-          state.gradMiddle = b.dataset.m;
-          state.gradEnd = b.dataset.e;
+          state.gradStart = b.dataset.s || state.gradStart;
+          state.gradMiddle = b.dataset.m || state.gradMiddle;
+          state.gradEnd = b.dataset.e || state.gradEnd;
           updateUI();
         }),
     );
-    document.getElementById("pl-enable-toggle").onchange = (e) => {
-      state.enabled = e.target.checked;
-      saveSettings();
-    };
-    document.getElementById("pl-style-solid").onclick = () => {
-      state.style = "solid";
-      updateUI();
-    };
-    document.getElementById("pl-style-grad").onclick = () => {
-      state.style = "gradient";
-      updateUI();
-    };
-    document.getElementById("pl-pick-start").oninput = (e) => {
-      state.gradStart = e.target.value;
-      updateUI();
-    };
-    document.getElementById("pl-pick-mid").oninput = (e) => {
-      state.gradMiddle = e.target.value;
-      updateUI();
-    };
-    document.getElementById("pl-pick-end").oninput = (e) => {
-      state.gradEnd = e.target.value;
-      updateUI();
-    };
-    document.getElementById("pl-pick-solid").oninput = (e) => {
-      state.solidColor = e.target.value;
-      updateUI();
-    };
-    document.getElementById("pl-thick-range").oninput = (e) => {
-      state.thickness = e.target.value;
-      updateUI();
-    };
-    document.getElementById("pl-cancel").onclick = hideModal;
-    document.getElementById("pl-save").onclick = hideModal;
+    // Should we even have an enable toggle? Being real, they can just disable the userscript.
+    // And, if they accidentally disable it, they could be confused.
+    const enableToggle = document.getElementById(
+      "pl-enable-toggle",
+    ) as HTMLInputElement | null;
+    if (enableToggle) {
+      enableToggle.onchange = (e) => {
+        state.enabled = (e.target as HTMLInputElement).checked;
+        saveSettings();
+      };
+    }
+    const styleSolidBtn = document.getElementById("pl-style-solid");
+    if (styleSolidBtn) {
+      styleSolidBtn.onclick = () => {
+        state.style = "solid";
+        updateUI();
+      };
+    }
+    const styleGradBtn = document.getElementById("pl-style-grad");
+    if (styleGradBtn) {
+      styleGradBtn.onclick = () => {
+        state.style = "gradient";
+        updateUI();
+      };
+    }
+    const pickStartBtn = document.getElementById(
+      "pl-pick-start",
+    ) as HTMLInputElement | null;
+    if (pickStartBtn) {
+      pickStartBtn.oninput = (e) => {
+        state.gradStart = (e.target as HTMLInputElement).value;
+        updateUI();
+      };
+    }
+    const pickMidBtn = document.getElementById(
+      "pl-pick-mid",
+    ) as HTMLInputElement | null;
+    if (pickMidBtn) {
+      pickMidBtn.oninput = (e) => {
+        state.gradMiddle = (e.target as HTMLInputElement).value;
+        updateUI();
+      };
+    }
+    const pickEndBtn = document.getElementById(
+      "pl-pick-end",
+    ) as HTMLInputElement | null;
+    if (pickEndBtn) {
+      pickEndBtn.oninput = (e) => {
+        state.gradEnd = (e.target as HTMLInputElement).value;
+        updateUI();
+      };
+    }
+    const pickSolidBtn = document.getElementById(
+      "pl-pick-solid",
+    ) as HTMLInputElement | null;
+    if (pickSolidBtn) {
+      pickSolidBtn.oninput = (e) => {
+        state.solidColor = (e.target as HTMLInputElement).value;
+        updateUI();
+      };
+    }
+    const thickRangeBtn = document.getElementById(
+      "pl-thick-range",
+    ) as HTMLInputElement | null;
+    if (thickRangeBtn) {
+      thickRangeBtn.oninput = (e) => {
+        state.thickness = parseInt((e.target as HTMLInputElement).value);
+        updateUI();
+      };
+    }
+    const cancelBtn = document.getElementById("pl-cancel");
+    if (cancelBtn) cancelBtn.onclick = hideModal;
+    const saveBtn = document.getElementById("pl-save");
+    if (saveBtn) saveBtn.onclick = hideModal;
     backdrop.onclick = (e) => {
       if (e.target === backdrop) hideModal();
     };
@@ -367,8 +450,13 @@ runAsClient(() => {
   const RDP_EPSILON = 0.00002;
   const TELEPORT_DISTANCE = 120;
 
-  const getSettings = () => {
-    const defaults = {
+  interface Point {
+    lat: number;
+    lng: number;
+  }
+
+  const getSettings = (): AppState => {
+    const defaults: AppState = {
       enabled: true,
       style: "gradient",
       solidColor: "#ff0000",
@@ -378,28 +466,25 @@ runAsClient(() => {
       thickness: 6,
     };
     try {
-      return {
-        ...defaults,
-        ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"),
-      };
-    } catch (e) {
+      const saved = localStorage.getItem(SETTINGS_KEY);
+      return saved ? { ...defaults, ...JSON.parse(saved) } : defaults;
+    } catch {
       return defaults;
     }
   };
 
   // --- Helpers ---
-  const hexToHsl = (hex) => {
-    let r = parseInt(hex.slice(1, 3), 16) / 255,
-      g = parseInt(hex.slice(3, 5), 16) / 255,
-      b = parseInt(hex.slice(5, 7), 16) / 255;
-    let max = Math.max(r, g, b),
-      min = Math.min(r, g, b),
-      h,
-      s,
-      l = (max + min) / 2;
-    if (max === min) h = s = 0;
-    else {
-      let d = max - min;
+  const hexToHsl = (hex: string) => {
+    const r = parseInt(hex.slice(1, 3), 16) / 255;
+    const g = parseInt(hex.slice(3, 5), 16) / 255;
+    const b = parseInt(hex.slice(5, 7), 16) / 255;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    let h = 0;
+    let s = 0;
+    const l = (max + min) / 2;
+    if (max !== min) {
+      const d = max - min;
       s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
       switch (max) {
         case r:
@@ -416,11 +501,11 @@ runAsClient(() => {
     }
     return { h: h * 360, s: s * 100, l: l * 100 };
   };
-  const hslToHex = (h, s, l) => {
+  const hslToHex = (h: number, s: number, l: number): string => {
     l /= 100;
     s /= 100;
     const a = s * Math.min(l, 1 - l);
-    const f = (n) => {
+    const f = (n: number) => {
       const k = (n + h / 30) % 12;
       const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
       return Math.round(255 * color)
@@ -429,11 +514,11 @@ runAsClient(() => {
     };
     return `#${f(0)}${f(8)}${f(4)}`;
   };
-  const interpolateHSL = (c1, c2, t) => {
-    const h1 = hexToHsl(c1),
-      h2 = hexToHsl(c2);
-    let hue1 = h1.h,
-      hue2 = h2.h;
+  const interpolateHSL = (c1: string, c2: string, t: number): string => {
+    const h1 = hexToHsl(c1);
+    const h2 = hexToHsl(c2);
+    let hue1 = h1.h;
+    let hue2 = h2.h;
     if (hue2 - hue1 > 180) hue1 += 360;
     else if (hue2 - hue1 < -180) hue2 += 360;
     return hslToHex(
@@ -442,7 +527,7 @@ runAsClient(() => {
       h1.l + (h2.l - h1.l) * t,
     );
   };
-  const getDistMeters = (p1, p2) => {
+  const getDistMeters = (p1: Point, p2: Point) => {
     const R = 6371e3;
     const dLat = ((p2.lat - p1.lat) * Math.PI) / 180;
     const dLng = ((p2.lng - p1.lng) * Math.PI) / 180;
@@ -453,60 +538,61 @@ runAsClient(() => {
         Math.sin(dLng / 2) ** 2;
     return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
   };
-  const findPerpDist = (p, l1, l2) => {
+  const findPerpDist = (p: Point, l1: Point, l2: Point) => {
     if (l1.lat === l2.lat && l1.lng === l2.lng)
       return Math.sqrt((p.lat - l1.lat) ** 2 + (p.lng - l1.lng) ** 2);
-    let num = Math.abs(
+    const num = Math.abs(
       (l2.lng - l1.lng) * p.lat -
         (l2.lat - l1.lat) * p.lng +
         l2.lat * l1.lng -
         l2.lng * l1.lat,
     );
-    let den = Math.sqrt((l2.lng - l1.lng) ** 2 + (l2.lat - l1.lat) ** 2);
+    const den = Math.sqrt((l2.lng - l1.lng) ** 2 + (l2.lat - l1.lat) ** 2);
     return num / den;
   };
-  const rdp = (points, epsilon) => {
+  const rdp = (points: Point[], epsilon: number): Point[] => {
     if (points.length <= 2) return points;
-    let dmax = 0,
-      index = 0,
-      end = points.length - 1;
+    let dmax = 0;
+    let index = 0;
+    const end = points.length - 1;
     for (let i = 1; i < end; i++) {
-      let d = findPerpDist(points[i], points[0], points[end]);
+      const d = findPerpDist(points[i], points[0], points[end]);
       if (d > dmax) {
         index = i;
         dmax = d;
       }
     }
     if (dmax > epsilon) {
-      let res1 = rdp(points.slice(0, index + 1), epsilon);
-      let res2 = rdp(points.slice(index), epsilon);
+      const res1 = rdp(points.slice(0, index + 1), epsilon);
+      const res2 = rdp(points.slice(index), epsilon);
       return res1.slice(0, res1.length - 1).concat(res2);
     } else {
       return [points[0], points[end]];
     }
   };
-  const saveToStorage = (key, value) => {
+  const saveToStorage = (key: string, value: any) => {
     const val = JSON.stringify(value);
     while (JSON.stringify(localStorage).length + val.length > 5242880) {
-      const ts = JSON.parse(localStorage.timestamps || "{}");
-      const oldest = Object.entries(ts).sort((a, b) => a[1] - b[1])[0];
+      const ts = JSON.parse(localStorage.getItem("timestamps") || "{}");
+      const oldest = Object.entries(ts as Record<string, number>).sort(
+        (a, b) => a[1] - b[1],
+      )[0];
       if (!oldest) break;
       delete ts[oldest[0]];
       Object.keys(localStorage).forEach((k) => {
         if (k.startsWith(oldest[0])) localStorage.removeItem(k);
       });
-      localStorage.timestamps = JSON.stringify(ts);
+      localStorage.setItem("timestamps", JSON.stringify(ts));
     }
     localStorage.setItem(key, val);
   };
 
   // --- State Detection ---
-  let markers = [],
-    inGame = false,
-    route = [],
-    currentRound = undefined,
-    mapState = 0;
-  let lastObservedSpawn = null;
+  const markers: google.maps.Polyline[] = [];
+  let inGame = false;
+  let route: Point[][] = [];
+  let mapState = 0;
+  let lastObservedSpawn: Point | null = null;
 
   const isGamePage = () => {
     const path = location.pathname;
@@ -551,18 +637,21 @@ runAsClient(() => {
   const getRoundNumber = () => {
     const spEl = document.querySelector("[data-qa=round-number] :nth-child(2)");
     if (spEl) return parseInt(spEl.innerHTML);
-    const duelEl = document.querySelector(
+    const duelEl = document.querySelector<HTMLElement>(
       '[class*="round-score-2_roundNumber"]',
     );
     if (duelEl) return parseInt(duelEl.innerText.replace(/\D/g, ""));
     return 0;
   };
 
-  const onMove = (sv) => {
+  const onMove = (sv: google.maps.StreetViewPanorama) => {
     console.log("[PathLogger] onMove triggered from Panorama");
     if (!getSettings().enabled || !isGamePage()) return;
 
-    const pos = { lat: sv.position.lat(), lng: sv.position.lng() };
+    const lat = sv.getPosition()?.lat();
+    const lng = sv.getPosition()?.lng();
+    if (lat === undefined || lng === undefined) return;
+    const pos = { lat, lng };
     console.log(
       "[PathLogger] onMove at:",
       pos.lat.toFixed(5),
@@ -597,7 +686,7 @@ runAsClient(() => {
     route[route.length - 1].push(pos);
   };
 
-  const onMapUpdate = (map) => {
+  const onMapUpdate = (map: google.maps.Map) => {
     const google = window.google;
     console.log("[PathLogger] map idle event triggered");
     if (!isGamePage() || !google || !google.maps || !google.maps.geometry)
@@ -613,7 +702,7 @@ runAsClient(() => {
     mapState = newState;
 
     markers.forEach((m) => m.setMap(null));
-    markers = [];
+    markers.length = 0;
 
     if (resultShown()) {
       const settings = getSettings();
@@ -643,20 +732,19 @@ runAsClient(() => {
       // RENDER
       if (!settings.enabled) return;
 
-      let keysToShow = [];
-      if (isGameFinished()) {
-        keysToShow = Object.keys(localStorage).filter(
-          (k) => k.startsWith(currentGameID) && !k.includes("timestamp"),
-        );
-      } else {
-        const rNum = getRoundNumber();
-        keysToShow = [currentGameID + "-" + rNum];
-      }
+      // RENDER
+      if (!settings.enabled) return;
+
+      const keysToShow = isGameFinished()
+        ? Object.keys(localStorage).filter(
+            (k) => k.startsWith(currentGameID) && !k.includes("timestamp"),
+          )
+        : [currentGameID + "-" + getRoundNumber()];
 
       keysToShow.forEach((k) => {
         const raw = localStorage.getItem(k);
         if (raw) {
-          const segs = JSON.parse(raw).map((x) =>
+          const segs = (JSON.parse(raw) as string[]).map((x) =>
             google.maps.geometry.encoding.decodePath(x),
           );
           const total = segs.reduce((a, b) => a + b.length, 0);
@@ -700,7 +788,7 @@ runAsClient(() => {
   };
 
   // --- ROBUST PROTOTYPE INTERCEPTION (Zero-Poller) ---
-  const interceptConstructors = (mapsObj) => {
+  const interceptConstructors = (mapsObj: typeof google.maps) => {
     let _Map = mapsObj.Map;
     let _StreetViewPanorama = mapsObj.StreetViewPanorama;
     let _mapHijacked = false;
@@ -713,22 +801,21 @@ runAsClient(() => {
       }
     };
 
-    const hijackBlueprint = (constructor, isSV) => {
-      return Object.assign(
-        function (...args) {
-          console.log(
-            `[PathLogger] ${isSV ? "StreetViewPanorama" : "Map"} constructed!`,
-          );
-          const res = constructor.apply(this, args);
-          if (isSV) {
-            this.addListener("position_changed", () => onMove(this));
-          } else {
-            this.addListener("idle", () => onMapUpdate(this));
-          }
-          return res;
-        },
-        { prototype: Object.create(constructor.prototype) },
-      );
+    const hijackBlueprint = (constructor: any, isSV: boolean) => {
+      const hijacked = function (this: any, ...args: any[]) {
+        console.log(
+          `[PathLogger] ${isSV ? "StreetViewPanorama" : "Map"} constructed!`,
+        );
+        const res = constructor.apply(this, args);
+        if (isSV) {
+          this.addListener("position_changed", () => onMove(this));
+        } else {
+          this.addListener("idle", () => onMapUpdate(this));
+        }
+        return res;
+      };
+      hijacked.prototype = Object.create(constructor.prototype);
+      return hijacked as any;
     };
 
     Object.defineProperty(mapsObj, "Map", {
@@ -769,7 +856,7 @@ runAsClient(() => {
       mapsObj.StreetViewPanorama = _StreetViewPanorama; // Self-trigger
   };
 
-  const interceptMaps = (googleObj) => {
+  const interceptMaps = (googleObj: typeof google) => {
     let _maps = googleObj.maps;
 
     Object.defineProperty(googleObj, "maps", {
