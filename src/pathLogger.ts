@@ -1,13 +1,3 @@
-function runAsClient(func: () => void): void {
-  const scriptElement = document.createElement("script");
-  scriptElement.type = "text/javascript";
-  scriptElement.text =
-    "(async () => { try { await (" +
-    func.toString() +
-    ")(); } catch (e) { console.error('[PathLogger] runAsClient error:', e); }})();";
-  document.head.appendChild(scriptElement);
-}
-
 interface AppState {
   enabled: boolean;
   style: string;
@@ -18,150 +8,168 @@ interface AppState {
   thickness: number;
 }
 
+setInterval(() => {
+  isSpectating();
+}, 1000);
+
 // --- PART 1: IMMEDIATE EXECUTION (Network & UI) ---
-(function () {
-  "use strict";
-  console.log("[PathLogger] Script Part 1: Immediate Execution started");
-  runAsClient(() => {
-    console.log("[PathLogger] runAsClient (Part 1) executing");
-    window.__GPL_GAME_ID = null;
-    window.__GPL_HAS_GUESSED = false;
+console.log("[PathLogger] Script Part 1: Immediate Execution started");
+window.__GPL_GAME_ID = null;
+window.__GPL_HAS_GUESSED = false;
 
-    const checkURL = (url: string | URL | undefined): void => {
-      if (typeof url !== "string") return;
-      if (url.includes("/api/lobby/") && url.includes("/join")) {
-        // Can potentially be cleaner with destructuring or optional chaining
-        const match = url.match(/\/api\/lobby\/([0-9a-f]{24})\/join/);
-        if (match && match[1]) {
-          window.__GPL_GAME_ID = match[1];
-          window.__GPL_HAS_GUESSED = false;
-        }
-      }
-      if (url.endsWith("/guess")) {
-        window.__GPL_HAS_GUESSED = true;
-      }
-    };
+const checkURL = (input: any): void => {
+  if (!input) return;
 
-    const originalFetch = window.fetch;
-    window.fetch = function (this: typeof window, ...args: any[]) {
-      if (args[0]) checkURL(args[0]);
-      return originalFetch.apply(
-        this,
-        args as [RequestInfo | URL, RequestInit | undefined],
-      );
-    };
+  // The input is technically only a string.
+  let urlString: string;
 
-    const originalOpen = XMLHttpRequest.prototype.open;
-    XMLHttpRequest.prototype.open = function (
-      this: XMLHttpRequest,
-      ...args: any[]
-    ) {
-      checkURL(args[1]);
-      return (originalOpen as any).apply(this, args);
-    };
-  });
-
-  const SETTINGS_KEY = "pl_settings_v2";
-  let state: AppState = {
-    enabled: true,
-    style: "gradient",
-    solidColor: "#ff0000",
-    gradStart: "#22c55e",
-    gradMiddle: "#eab308",
-    gradEnd: "#ef4444",
-    thickness: 6,
-  };
-
-  function loadSettings() {
-    const saved = localStorage.getItem(SETTINGS_KEY);
-    if (saved) state = { ...state, ...JSON.parse(saved) };
+  if (typeof input === "string") {
+    urlString = input;
+  } else if (input instanceof URL) {
+    urlString = input.href;
+  } else if (input instanceof Request) {
+    urlString = input.url;
+  } else {
+    console.warn("URL Invalid!");
+    return;
   }
-  function saveSettings() {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(state));
-  }
-  loadSettings();
 
-  // Do we need both HexToHsl and HslToHex? Can we just use one?
-  function uiHexToHsl(hex: string) {
-    const r = parseInt(hex.slice(1, 3), 16) / 255;
-    const g = parseInt(hex.slice(3, 5), 16) / 255;
-    const b = parseInt(hex.slice(5, 7), 16) / 255;
-    const max = Math.max(r, g, b);
-    const min = Math.min(r, g, b);
-    let h = 0;
-    let s = 0;
-    const l = (max + min) / 2;
-    if (max !== min) {
-      const d = max - min;
-      s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-      switch (max) {
-        case r:
-          h = (g - b) / d + (g < b ? 6 : 0);
-          break;
-        case g:
-          h = (b - r) / d + 2;
-          break;
-        case b:
-          h = (r - g) / d + 4;
-          break;
-      }
-      h /= 6;
+  // This will print every URL.
+  // console.log("[PathLogger] Checking URL:", urlString);
+
+  if (urlString.includes("/api/lobby/") && urlString.includes("/join")) {
+    // Can potentially be cleaner with destructuring or optional chaining
+    const match = urlString.match(/\/api\/lobby\/([0-9a-f]{24})\/join/);
+    if (match && match[1]) {
+      window.__GPL_GAME_ID = match[1];
+      window.__GPL_HAS_GUESSED = false;
     }
-    return { h: h * 360, s: s * 100, l: l * 100 };
   }
-  const uiHslToHex = (h: number, s: number, l: number): string => {
-    l /= 100;
-    s /= 100;
-    const a = s * Math.min(l, 1 - l);
-    const f = (n: number) => {
-      const k = (n + h / 30) % 12;
-      const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
-      return Math.round(255 * color)
-        .toString(16)
-        .padStart(2, "0");
-    };
-    return `#${f(0)}${f(8)}${f(4)}`;
-  };
-  // Returns a hex color that is t% of the way between c1 and c2
-  const uiInterpolateHSL = (c1: string, c2: string, t: number): string => {
-    const h1 = uiHexToHsl(c1);
-    const h2 = uiHexToHsl(c2);
-    let hue1 = h1.h;
-    let hue2 = h2.h;
-    if (hue2 - hue1 > 180) hue1 += 360;
-    else if (hue2 - hue1 < -180) hue2 += 360;
-    return uiHslToHex(
-      (hue1 + (hue2 - hue1) * t) % 360,
-      h1.s + (h2.s - h1.s) * t,
-      h1.l + (h2.l - h1.l) * t,
-    );
-  };
-
-  interface Preset {
-    name: string;
-    start: string;
-    middle: string;
-    end: string;
+  if (urlString.endsWith("/guess")) {
+    window.__GPL_HAS_GUESSED = true;
+    console.warn("HAS GUESSED");
   }
+};
 
-  const presets: Preset[] = [
-    {
-      name: "The Classic",
-      start: "#22c55e",
-      middle: "#eab308",
-      end: "#ef4444",
-    },
-    { name: "The Fire", start: "#fef08a", middle: "#fb923c", end: "#dc2626" },
-    { name: "Ocean", start: "#70e1d4", middle: "#2d568b", end: "#161b5a" },
-    { name: "Rose", start: "#fddbff", middle: "#bc57b4", end: "#3a123b" },
-    { name: "Forest", start: "#aef29c", middle: "#246149", end: "#06280a" },
-    { name: "Peanut", start: "#eae79f", middle: "#ffa500", end: "#171107" },
-  ];
+const originalFetch = window.fetch;
+window.fetch = function (this: typeof window, ...args: any[]) {
+  if (args[0]) checkURL(args[0]);
+  return originalFetch.apply(
+    this,
+    args as [RequestInfo | URL, RequestInit | undefined],
+  );
+};
 
-  const style = document.createElement("style");
-  // All this HTML/CSS in JS is pretty verbose, maybe we can extract this into a component.
-  // We could probably even write a css file and import it, since using Vite to build.
-  style.innerHTML = `
+const originalOpen = XMLHttpRequest.prototype.open;
+XMLHttpRequest.prototype.open = function (
+  this: XMLHttpRequest,
+  ...args: any[]
+) {
+  checkURL(args[1]);
+  return (originalOpen as any).apply(this, args);
+};
+
+const SETTINGS_KEY = "pl_settings_v2";
+let state: AppState = {
+  enabled: true,
+  style: "gradient",
+  solidColor: "#ff0000",
+  gradStart: "#22c55e",
+  gradMiddle: "#eab308",
+  gradEnd: "#ef4444",
+  thickness: 6,
+};
+
+function loadSettings() {
+  const saved = localStorage.getItem(SETTINGS_KEY);
+  if (saved) state = { ...state, ...JSON.parse(saved) };
+}
+function saveSettings() {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(state));
+}
+loadSettings();
+
+// Do we need both HexToHsl and HslToHex? Can we just use one?
+function uiHexToHsl(hex: string) {
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  let h = 0;
+  let s = 0;
+  const l = (max + min) / 2;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r:
+        h = (g - b) / d + (g < b ? 6 : 0);
+        break;
+      case g:
+        h = (b - r) / d + 2;
+        break;
+      case b:
+        h = (r - g) / d + 4;
+        break;
+    }
+    h /= 6;
+  }
+  return { h: h * 360, s: s * 100, l: l * 100 };
+}
+const uiHslToHex = (h: number, s: number, l: number): string => {
+  l /= 100;
+  s /= 100;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+    return Math.round(255 * color)
+      .toString(16)
+      .padStart(2, "0");
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+};
+// Returns a hex color that is t% of the way between c1 and c2
+const uiInterpolateHSL = (c1: string, c2: string, t: number): string => {
+  const h1 = uiHexToHsl(c1);
+  const h2 = uiHexToHsl(c2);
+  let hue1 = h1.h;
+  let hue2 = h2.h;
+  if (hue2 - hue1 > 180) hue1 += 360;
+  else if (hue2 - hue1 < -180) hue2 += 360;
+  return uiHslToHex(
+    (hue1 + (hue2 - hue1) * t) % 360,
+    h1.s + (h2.s - h1.s) * t,
+    h1.l + (h2.l - h1.l) * t,
+  );
+};
+
+interface Preset {
+  name: string;
+  start: string;
+  middle: string;
+  end: string;
+}
+
+const presets: Preset[] = [
+  {
+    name: "The Classic",
+    start: "#22c55e",
+    middle: "#eab308",
+    end: "#ef4444",
+  },
+  { name: "The Fire", start: "#fef08a", middle: "#fb923c", end: "#dc2626" },
+  { name: "Ocean", start: "#70e1d4", middle: "#2d568b", end: "#161b5a" },
+  { name: "Rose", start: "#fddbff", middle: "#bc57b4", end: "#3a123b" },
+  { name: "Forest", start: "#aef29c", middle: "#246149", end: "#06280a" },
+  { name: "Peanut", start: "#eae79f", middle: "#ffa500", end: "#171107" },
+];
+
+const style = document.createElement("style");
+// All this HTML/CSS in JS is pretty verbose, maybe we can extract this into a component.
+// We could probably even write a css file and import it, since using Vite to build.
+style.innerHTML = `
         :root { --pl-bg-modal: #1e1b3a; --pl-bg-accent: #2a2650; --pl-bg-hover: #332d5c; --pl-blue: #3b82f6; --pl-blue-hover: #2563eb; --pl-text: #ffffff; --pl-dim: #9ca3af; --pl-border: #2a2650; }
         #pl-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(8px); z-index: 99999; display: none; justify-content: center; align-items: center; padding: 20px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
         #pl-modal { background-color: var(--pl-bg-modal); width: 100%; max-width: 550px; max-height: 90vh; border-radius: 20px; border: 1px solid var(--pl-border); color: var(--pl-text); box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; animation: pl-fade-in 0.2s ease-out; overflow: hidden; }
@@ -206,12 +214,12 @@ interface AppState {
         .pl-switch input:checked + .pl-slider-round { background: var(--pl-blue); }
         .pl-switch input:checked + .pl-slider-round:before { transform: translateX(24px); }
     `;
-  document.head.appendChild(style);
+document.head.appendChild(style);
 
-  const backdrop = document.createElement("div");
-  // What's the id for?
-  backdrop.id = "pl-backdrop";
-  backdrop.innerHTML = `
+const backdrop = document.createElement("div");
+// What's the id for?
+backdrop.id = "pl-backdrop";
+backdrop.innerHTML = `
         <div id="pl-modal">
             <div class="pl-header"><h2>Path Logger Settings</h2><p>Customize your GeoGuessr path visualization</p></div>
             <div class="pl-content">
@@ -238,658 +246,708 @@ interface AppState {
         </div>
     `;
 
-  function updateUI() {
-    const solidUI = document.getElementById("pl-solid-ui");
-    const gradUI = document.getElementById("pl-grad-ui");
-    const styleSolid = document.getElementById("pl-style-solid");
-    const styleGrad = document.getElementById("pl-style-grad");
-    const swatchStart = document.getElementById("pl-swatch-start");
-    const swatchMid = document.getElementById("pl-swatch-mid");
-    const swatchEnd = document.getElementById("pl-swatch-end");
-    const swatchSolid = document.getElementById("pl-swatch-solid");
-    const pickStart = document.getElementById(
-      "pl-pick-start",
-    ) as HTMLInputElement;
-    const pickMid = document.getElementById("pl-pick-mid") as HTMLInputElement;
-    const pickEnd = document.getElementById("pl-pick-end") as HTMLInputElement;
-    const pickSolid = document.getElementById(
-      "pl-pick-solid",
-    ) as HTMLInputElement;
-    const gradBar = document.getElementById("pl-grad-bar");
-    const thickVal = document.getElementById("pl-thick-val");
-    const svgPath = document.getElementById("pl-svg-path");
+function updateUI() {
+  const solidUI = document.getElementById("pl-solid-ui");
+  const gradUI = document.getElementById("pl-grad-ui");
+  const styleSolid = document.getElementById("pl-style-solid");
+  const styleGrad = document.getElementById("pl-style-grad");
+  const swatchStart = document.getElementById("pl-swatch-start");
+  const swatchMid = document.getElementById("pl-swatch-mid");
+  const swatchEnd = document.getElementById("pl-swatch-end");
+  const swatchSolid = document.getElementById("pl-swatch-solid");
+  const pickStart = document.getElementById(
+    "pl-pick-start",
+  ) as HTMLInputElement;
+  const pickMid = document.getElementById("pl-pick-mid") as HTMLInputElement;
+  const pickEnd = document.getElementById("pl-pick-end") as HTMLInputElement;
+  const pickSolid = document.getElementById(
+    "pl-pick-solid",
+  ) as HTMLInputElement;
+  const gradBar = document.getElementById("pl-grad-bar");
+  const thickVal = document.getElementById("pl-thick-val");
+  const svgPath = document.getElementById("pl-svg-path");
 
-    if (solidUI)
-      solidUI.classList.toggle("pl-hidden", state.style === "gradient");
-    if (gradUI) gradUI.classList.toggle("pl-hidden", state.style === "solid");
-    if (styleSolid)
-      styleSolid.classList.toggle("active", state.style === "solid");
-    if (styleGrad)
-      styleGrad.classList.toggle("active", state.style === "gradient");
+  if (solidUI)
+    solidUI.classList.toggle("pl-hidden", state.style === "gradient");
+  if (gradUI) gradUI.classList.toggle("pl-hidden", state.style === "solid");
+  if (styleSolid)
+    styleSolid.classList.toggle("active", state.style === "solid");
+  if (styleGrad)
+    styleGrad.classList.toggle("active", state.style === "gradient");
 
-    if (swatchStart) swatchStart.style.backgroundColor = state.gradStart;
-    if (swatchMid) swatchMid.style.backgroundColor = state.gradMiddle;
-    if (swatchEnd) swatchEnd.style.backgroundColor = state.gradEnd;
-    if (swatchSolid) swatchSolid.style.backgroundColor = state.solidColor;
+  if (swatchStart) swatchStart.style.backgroundColor = state.gradStart;
+  if (swatchMid) swatchMid.style.backgroundColor = state.gradMiddle;
+  if (swatchEnd) swatchEnd.style.backgroundColor = state.gradEnd;
+  if (swatchSolid) swatchSolid.style.backgroundColor = state.solidColor;
 
-    if (pickStart) pickStart.value = state.gradStart;
-    if (pickMid) pickMid.value = state.gradMiddle;
-    if (pickEnd) pickEnd.value = state.gradEnd;
-    if (pickSolid) pickSolid.value = state.solidColor;
+  if (pickStart) pickStart.value = state.gradStart;
+  if (pickMid) pickMid.value = state.gradMiddle;
+  if (pickEnd) pickEnd.value = state.gradEnd;
+  if (pickSolid) pickSolid.value = state.solidColor;
 
-    let gradStr = "linear-gradient(to right, ";
-    const svgGrad = document.getElementById("pl-svg-grad");
-    if (svgGrad) {
-      svgGrad.innerHTML = "";
-      for (let i = 0; i <= 40; i++) {
-        const t = i / 40;
-        const color =
-          t < 0.5
-            ? uiInterpolateHSL(state.gradStart, state.gradMiddle, t * 2)
-            : uiInterpolateHSL(state.gradMiddle, state.gradEnd, (t - 0.5) * 2);
-        const pos = (t * 100).toFixed(1) + "%";
-        gradStr += `${color} ${pos}${i < 40 ? ", " : ")"}`;
-        const stop = document.createElementNS(
-          "http://www.w3.org/2000/svg",
-          "stop",
-        );
-        stop.setAttribute("offset", pos);
-        stop.setAttribute("stop-color", color);
-        svgGrad.appendChild(stop);
-      }
-    }
-    if (gradBar) gradBar.style.background = gradStr;
-    if (thickVal) thickVal.innerText = state.thickness + "px";
-    if (svgPath) {
-      svgPath.setAttribute("stroke-width", state.thickness.toString());
-      svgPath.setAttribute(
-        "stroke",
-        state.style === "solid" ? state.solidColor : "url(#pl-svg-grad)",
+  let gradStr = "linear-gradient(to right, ";
+  const svgGrad = document.getElementById("pl-svg-grad");
+  if (svgGrad) {
+    svgGrad.innerHTML = "";
+    for (let i = 0; i <= 40; i++) {
+      const t = i / 40;
+      const color =
+        t < 0.5
+          ? uiInterpolateHSL(state.gradStart, state.gradMiddle, t * 2)
+          : uiInterpolateHSL(state.gradMiddle, state.gradEnd, (t - 0.5) * 2);
+      const pos = (t * 100).toFixed(1) + "%";
+      gradStr += `${color} ${pos}${i < 40 ? ", " : ")"}`;
+      const stop = document.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "stop",
       );
+      stop.setAttribute("offset", pos);
+      stop.setAttribute("stop-color", color);
+      svgGrad.appendChild(stop);
     }
-    saveSettings();
   }
+  if (gradBar) gradBar.style.background = gradStr;
+  if (thickVal) thickVal.innerText = state.thickness + "px";
+  if (svgPath) {
+    svgPath.setAttribute("stroke-width", state.thickness.toString());
+    svgPath.setAttribute(
+      "stroke",
+      state.style === "solid" ? state.solidColor : "url(#pl-svg-grad)",
+    );
+  }
+  saveSettings();
+}
 
-  const showModal = () => {
-    backdrop.style.display = "flex";
-    updateUI();
-  };
-  const hideModal = () => {
-    backdrop.style.display = "none";
-  };
+const showModal = () => {
+  backdrop.style.display = "flex";
+  updateUI();
+};
+const hideModal = () => {
+  backdrop.style.display = "none";
+};
 
-  const injectUI = () => {
-    if (!document.getElementById("pl-backdrop"))
-      document.body.appendChild(backdrop);
-    const presetContainer = document.getElementById("pl-presets");
-    if (presetContainer) {
-      presetContainer.innerHTML = presets
-        .map(
-          (p) => `
+const injectUI = () => {
+  if (!document.getElementById("pl-backdrop"))
+    document.body.appendChild(backdrop);
+  const presetContainer = document.getElementById("pl-presets");
+  if (presetContainer) {
+    presetContainer.innerHTML = presets
+      .map(
+        (p) => `
               <button class="pl-preset" data-s="${p.start}" data-m="${p.middle}" data-e="${p.end}">
                   <div class="pl-preset-bar" style="background:linear-gradient(to right, ${p.start}, ${p.middle}, ${p.end})"></div>
                   <span>${p.name}</span>
               </button>
           `,
-        )
-        .join("");
-    }
-    document.querySelectorAll<HTMLButtonElement>(".pl-preset").forEach(
-      (b) =>
-        (b.onclick = () => {
-          state.gradStart = b.dataset.s || state.gradStart;
-          state.gradMiddle = b.dataset.m || state.gradMiddle;
-          state.gradEnd = b.dataset.e || state.gradEnd;
-          updateUI();
-        }),
-    );
-    // Should we even have an enable toggle? Being real, they can just disable the userscript.
-    // And, if they accidentally disable it, they could be confused.
-    const enableToggle = document.getElementById(
-      "pl-enable-toggle",
-    ) as HTMLInputElement | null;
-    if (enableToggle) {
-      enableToggle.onchange = (e) => {
-        state.enabled = (e.target as HTMLInputElement).checked;
-        saveSettings();
-      };
-    }
-    const styleSolidBtn = document.getElementById("pl-style-solid");
-    if (styleSolidBtn) {
-      styleSolidBtn.onclick = () => {
-        state.style = "solid";
+      )
+      .join("");
+  }
+  document.querySelectorAll<HTMLButtonElement>(".pl-preset").forEach(
+    (b) =>
+      (b.onclick = () => {
+        state.gradStart = b.dataset.s || state.gradStart;
+        state.gradMiddle = b.dataset.m || state.gradMiddle;
+        state.gradEnd = b.dataset.e || state.gradEnd;
         updateUI();
-      };
-    }
-    const styleGradBtn = document.getElementById("pl-style-grad");
-    if (styleGradBtn) {
-      styleGradBtn.onclick = () => {
-        state.style = "gradient";
-        updateUI();
-      };
-    }
-    const pickStartBtn = document.getElementById(
-      "pl-pick-start",
-    ) as HTMLInputElement | null;
-    if (pickStartBtn) {
-      pickStartBtn.oninput = (e) => {
-        state.gradStart = (e.target as HTMLInputElement).value;
-        updateUI();
-      };
-    }
-    const pickMidBtn = document.getElementById(
-      "pl-pick-mid",
-    ) as HTMLInputElement | null;
-    if (pickMidBtn) {
-      pickMidBtn.oninput = (e) => {
-        state.gradMiddle = (e.target as HTMLInputElement).value;
-        updateUI();
-      };
-    }
-    const pickEndBtn = document.getElementById(
-      "pl-pick-end",
-    ) as HTMLInputElement | null;
-    if (pickEndBtn) {
-      pickEndBtn.oninput = (e) => {
-        state.gradEnd = (e.target as HTMLInputElement).value;
-        updateUI();
-      };
-    }
-    const pickSolidBtn = document.getElementById(
-      "pl-pick-solid",
-    ) as HTMLInputElement | null;
-    if (pickSolidBtn) {
-      pickSolidBtn.oninput = (e) => {
-        state.solidColor = (e.target as HTMLInputElement).value;
-        updateUI();
-      };
-    }
-    const thickRangeBtn = document.getElementById(
-      "pl-thick-range",
-    ) as HTMLInputElement | null;
-    if (thickRangeBtn) {
-      thickRangeBtn.oninput = (e) => {
-        state.thickness = parseInt((e.target as HTMLInputElement).value);
-        updateUI();
-      };
-    }
-    const cancelBtn = document.getElementById("pl-cancel");
-    if (cancelBtn) cancelBtn.onclick = hideModal;
-    const saveBtn = document.getElementById("pl-save");
-    if (saveBtn) saveBtn.onclick = hideModal;
-    backdrop.onclick = (e) => {
-      if (e.target === backdrop) hideModal();
+      }),
+  );
+  // Should we even have an enable toggle? Being real, they can just disable the userscript.
+  // And, if they accidentally disable it, they could be confused.
+  const enableToggle = document.getElementById(
+    "pl-enable-toggle",
+  ) as HTMLInputElement | null;
+  if (enableToggle) {
+    enableToggle.onchange = (e) => {
+      state.enabled = (e.target as HTMLInputElement).checked;
+      saveSettings();
     };
+  }
+  const styleSolidBtn = document.getElementById("pl-style-solid");
+  if (styleSolidBtn) {
+    styleSolidBtn.onclick = () => {
+      state.style = "solid";
+      updateUI();
+    };
+  }
+  const styleGradBtn = document.getElementById("pl-style-grad");
+  if (styleGradBtn) {
+    styleGradBtn.onclick = () => {
+      state.style = "gradient";
+      updateUI();
+    };
+  }
+  const pickStartBtn = document.getElementById(
+    "pl-pick-start",
+  ) as HTMLInputElement | null;
+  if (pickStartBtn) {
+    pickStartBtn.oninput = (e) => {
+      state.gradStart = (e.target as HTMLInputElement).value;
+      updateUI();
+    };
+  }
+  const pickMidBtn = document.getElementById(
+    "pl-pick-mid",
+  ) as HTMLInputElement | null;
+  if (pickMidBtn) {
+    pickMidBtn.oninput = (e) => {
+      state.gradMiddle = (e.target as HTMLInputElement).value;
+      updateUI();
+    };
+  }
+  const pickEndBtn = document.getElementById(
+    "pl-pick-end",
+  ) as HTMLInputElement | null;
+  if (pickEndBtn) {
+    pickEndBtn.oninput = (e) => {
+      state.gradEnd = (e.target as HTMLInputElement).value;
+      updateUI();
+    };
+  }
+  const pickSolidBtn = document.getElementById(
+    "pl-pick-solid",
+  ) as HTMLInputElement | null;
+  if (pickSolidBtn) {
+    pickSolidBtn.oninput = (e) => {
+      state.solidColor = (e.target as HTMLInputElement).value;
+      updateUI();
+    };
+  }
+  const thickRangeBtn = document.getElementById(
+    "pl-thick-range",
+  ) as HTMLInputElement | null;
+  if (thickRangeBtn) {
+    thickRangeBtn.oninput = (e) => {
+      state.thickness = parseInt((e.target as HTMLInputElement).value);
+      updateUI();
+    };
+  }
+  // Kind of funny that clicking the cancel and save button and backdrop all do the same thing
+  // But, it would be annoying to accidentally lose your settings
+  const cancelBtn = document.getElementById("pl-cancel");
+  if (cancelBtn) cancelBtn.onclick = hideModal;
+  const saveBtn = document.getElementById("pl-save");
+  if (saveBtn) saveBtn.onclick = hideModal;
+  backdrop.onclick = (e) => {
+    if (e.target === backdrop) hideModal();
   };
+};
 
-  const injectButton = () => {
-    const headerRight = document.querySelector(
-      "[class*=header-desktop_desktopSectionRight__]",
-    );
-    if (headerRight && !document.getElementById("pl-settings-btn")) {
-      const btn = document.createElement("div");
-      btn.id = "pl-settings-btn";
-      btn.style =
-        "cursor:pointer; display:flex; align-items:center; margin-right:15px; transition:opacity 0.2s;";
-      btn.innerHTML = `<img src="https://www.svgrepo.com/show/455171/route-destination.svg" style="width: 22px; height: 22px; filter: brightness(0) invert(1); opacity: 1.0;">`;
-      btn.onclick = showModal;
-      headerRight.insertBefore(btn, headerRight.firstChild);
-      injectUI();
-    }
-  };
+const injectButton = () => {
+  const headerRight = document.querySelector(
+    "[class*=header-desktop_desktopSectionRight__]",
+  );
+  if (headerRight && !document.getElementById("pl-settings-btn")) {
+    const btn = document.createElement("div");
+    btn.id = "pl-settings-btn";
+    btn.style =
+      "cursor:pointer; display:flex; align-items:center; margin-right:15px; transition:opacity 0.2s;";
+    btn.innerHTML = `<img src="https://www.svgrepo.com/show/455171/route-destination.svg" style="width: 22px; height: 22px; filter: brightness(0) invert(1); opacity: 1.0;">`;
+    btn.onclick = showModal;
+    headerRight.insertBefore(btn, headerRight.firstChild);
+    injectUI();
+  }
+};
 
-  const uiObserver = new MutationObserver(injectButton);
-  uiObserver.observe(document.body, { childList: true, subtree: true });
-})();
+// Seems a bit heavy, especially since it is never disconnected, potential memory leak.
+// But, since it's an SPA, might be necessary.
+// But, it's fine for now.
+const uiObserver = new MutationObserver(injectButton);
+uiObserver.observe(document.body, { childList: true, subtree: true });
 
 // --- PART 2: MAP LOGIC ---
 console.log("[PathLogger] Script Part 2: Initializing robust map hook...");
-runAsClient(() => {
-  console.log("[PathLogger] runAsClient (Part 2) executing");
-  const SETTINGS_KEY = "pl_settings_v2";
-  const RDP_EPSILON = 0.00002;
-  const TELEPORT_DISTANCE = 120;
+console.log("[PathLogger] runAsClient (Part 2) executing");
+const RDP_EPSILON = 0.00002;
+const TELEPORT_DISTANCE = 120;
 
-  interface Point {
-    lat: number;
-    lng: number;
+interface Point {
+  lat: number;
+  lng: number;
+}
+
+const getSettings = (): AppState => {
+  const defaults: AppState = {
+    enabled: true,
+    style: "gradient",
+    solidColor: "#ff0000",
+    gradStart: "#22c55e",
+    gradMiddle: "#eab308",
+    gradEnd: "#ef4444",
+    thickness: 6,
+  };
+  try {
+    const saved = localStorage.getItem(SETTINGS_KEY);
+    return saved ? { ...defaults, ...JSON.parse(saved) } : defaults;
+  } catch {
+    return defaults;
+  }
+};
+
+// --- Helpers ---
+// Wait, didn't we already define this in part 1?
+const hexToHsl = (hex: string) => {
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  let h = 0;
+  let s = 0;
+  const l = (max + min) / 2;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r:
+        h = (g - b) / d + (g < b ? 6 : 0);
+        break;
+      case g:
+        h = (b - r) / d + 2;
+        break;
+      case b:
+        h = (r - g) / d + 4;
+        break;
+    }
+    h /= 6;
+  }
+  return { h: h * 360, s: s * 100, l: l * 100 };
+};
+const hslToHex = (h: number, s: number, l: number): string => {
+  l /= 100;
+  s /= 100;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+    return Math.round(255 * color)
+      .toString(16)
+      .padStart(2, "0");
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+};
+const interpolateHSL = (c1: string, c2: string, t: number): string => {
+  const h1 = hexToHsl(c1);
+  const h2 = hexToHsl(c2);
+  let hue1 = h1.h;
+  let hue2 = h2.h;
+  if (hue2 - hue1 > 180) hue1 += 360;
+  else if (hue2 - hue1 < -180) hue2 += 360;
+  return hslToHex(
+    (hue1 + (hue2 - hue1) * t) % 360,
+    h1.s + (h2.s - h1.s) * t,
+    h1.l + (h2.l - h1.l) * t,
+  );
+};
+const getDistMeters = (p1: Point, p2: Point) => {
+  const R = 6371e3;
+  const dLat = ((p2.lat - p1.lat) * Math.PI) / 180;
+  const dLng = ((p2.lng - p1.lng) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((p1.lat * Math.PI) / 180) *
+      Math.cos((p2.lat * Math.PI) / 180) *
+      Math.sin(dLng / 2) ** 2;
+  return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+};
+const findPerpDist = (p: Point, l1: Point, l2: Point) => {
+  if (l1.lat === l2.lat && l1.lng === l2.lng)
+    return Math.sqrt((p.lat - l1.lat) ** 2 + (p.lng - l1.lng) ** 2);
+  const num = Math.abs(
+    (l2.lng - l1.lng) * p.lat -
+      (l2.lat - l1.lat) * p.lng +
+      l2.lat * l1.lng -
+      l2.lng * l1.lat,
+  );
+  const den = Math.sqrt((l2.lng - l1.lng) ** 2 + (l2.lat - l1.lat) ** 2);
+  return num / den;
+};
+const rdp = (points: Point[], epsilon: number): Point[] => {
+  if (points.length <= 2) return points;
+  let dmax = 0;
+  let index = 0;
+  const end = points.length - 1;
+  for (let i = 1; i < end; i++) {
+    const d = findPerpDist(points[i], points[0], points[end]);
+    if (d > dmax) {
+      index = i;
+      dmax = d;
+    }
+  }
+  if (dmax > epsilon) {
+    const res1 = rdp(points.slice(0, index + 1), epsilon);
+    const res2 = rdp(points.slice(index), epsilon);
+    return res1.slice(0, res1.length - 1).concat(res2);
+  } else {
+    return [points[0], points[end]];
+  }
+};
+const saveToStorage = (key: string, value: any) => {
+  const val = JSON.stringify(value);
+  while (JSON.stringify(localStorage).length + val.length > 5242880) {
+    const ts = JSON.parse(localStorage.getItem("timestamps") || "{}");
+    const oldest = Object.entries(ts as Record<string, number>).sort(
+      (a, b) => a[1] - b[1],
+    )[0];
+    if (!oldest) break;
+    delete ts[oldest[0]];
+    Object.keys(localStorage).forEach((k) => {
+      if (k.startsWith(oldest[0])) localStorage.removeItem(k);
+    });
+    localStorage.setItem("timestamps", JSON.stringify(ts));
+  }
+  localStorage.setItem(key, val);
+};
+
+// --- State Detection ---
+// This needs to be updated
+// Doesn't work with duels.
+// Issues:
+// 1. Tracking opponent when spectating them
+// 2. Not rendering on map between rounds
+// I suspect Geoguessr may have changed their website
+const markers: google.maps.Polyline[] = [];
+let inGame = false;
+let route: Point[][] = [];
+let mapState = 0;
+let lastObservedSpawn: Point | null = null;
+
+const isGamePage = () => {
+  const path = location.pathname;
+  return (
+    path.includes("/challenge/") ||
+    path.includes("/results/") ||
+    path.includes("/game/") ||
+    path.includes("/duels/") ||
+    path.includes("/multiplayer") ||
+    path.includes("/summary")
+  );
+};
+
+// const resultShown = () => {
+//   // What is location, where is it from?
+//   if (document.querySelector('[data-qa="result-view-bottom"]')) return true;
+//   if (document.querySelector('[class*="round-score-2_root"]')) return true;
+//   if (location.href.includes("results") || location.href.includes("summary"))
+//     return true;
+//   return false;
+// };
+
+const resultShown = () => {
+  // Single player, final summaries, etc.
+  if (document.querySelector('[data-qa="result-view-bottom"]')) {
+    console.log("Found result-view-bottom screen! Rendering path.");
+    return true;
+  }
+  // Duels Round Result
+  if (document.querySelector('[data-qa="round-result"]')) {
+    console.log("Found Round Result screen! Rendering path.");
+    return true;
+  }
+  // Updated class fallback (Changed from round-score-2_root to round-score_root)
+  if (document.querySelector('[class*="round-score_root"]')) {
+    console.log(
+      "Couldn't find the data-qa, fell back to round-score_root class. Rendering path.",
+    );
+    return true;
+  }
+  if (location.href.includes("results") || location.href.includes("summary")) {
+    console.log("Found results/summary page. Rendering path.");
+    return true;
+  }
+  return false;
+};
+
+const isGameFinished = () => {
+  if (location.href.includes("results") || location.href.includes("summary"))
+    return true;
+  if (
+    document.querySelector('[data-qa="play-again-button"]') ||
+    document.querySelector('[class*="play-again-button"]')
+  )
+    return true;
+  return false;
+};
+
+const isSpectating = () => {
+  if (document.querySelector('[class*="post-guess-player-spectator_root"]')) {
+    console.log("Currently spectating, so I'm not going to record the path.");
+    return true;
+  }
+  console.log("Not spectating, so I'm going to record the path.");
+  return false;
+};
+
+const getGameID = () => {
+  const urlMatch = location.href.match(/\w{15,}/);
+  if (urlMatch && !location.pathname.includes("multiplayer")) {
+    return urlMatch[0];
+  }
+  if (window.__GPL_GAME_ID) {
+    return window.__GPL_GAME_ID;
+  }
+  // Is this check necessary?
+  if (urlMatch) return urlMatch[0];
+  return "unknown_game";
+};
+
+const getRoundNumber = () => {
+  const spEl = document.querySelector("[data-qa=round-number] :nth-child(2)");
+  if (spEl) return parseInt(spEl.innerHTML);
+  const duelEl = document.querySelector<HTMLElement>(
+    '[class*="round-score-2_roundNumber"]',
+  );
+  if (duelEl) return parseInt(duelEl.innerText.replace(/\D/g, ""));
+  return 0;
+};
+
+const onMove = (sv: google.maps.StreetViewPanorama) => {
+  console.log("[PathLogger] onMove triggered from Panorama");
+  if (!getSettings().enabled || !isGamePage()) return;
+
+  const lat = sv.getPosition()?.lat();
+  const lng = sv.getPosition()?.lng();
+  if (lat === undefined || lng === undefined) return;
+  const pos = { lat, lng };
+  console.log(
+    "[PathLogger] onMove at:",
+    pos.lat.toFixed(5),
+    pos.lng.toFixed(5),
+  );
+
+  // 1. Result visible? ALWAYS update spawn buffer and reset guess flag.
+  if (resultShown()) {
+    lastObservedSpawn = pos;
+    if (window.__GPL_HAS_GUESSED) window.__GPL_HAS_GUESSED = false;
+    console.log("Reset Guessed Status, Results Screen Detected!");
+    return;
   }
 
-  const getSettings = (): AppState => {
-    const defaults: AppState = {
-      enabled: true,
-      style: "gradient",
-      solidColor: "#ff0000",
-      gradStart: "#22c55e",
-      gradMiddle: "#eab308",
-      gradEnd: "#ef4444",
-      thickness: 6,
-    };
-    try {
-      const saved = localStorage.getItem(SETTINGS_KEY);
-      return saved ? { ...defaults, ...JSON.parse(saved) } : defaults;
-    } catch {
-      return defaults;
-    }
-  };
+  // 2. Spectating? Stop.
+  if (window.__GPL_HAS_GUESSED) return;
+  if (isSpectating()) return;
+  console.log("Moved, and has not guessed!");
 
-  // --- Helpers ---
-  const hexToHsl = (hex: string) => {
-    const r = parseInt(hex.slice(1, 3), 16) / 255;
-    const g = parseInt(hex.slice(3, 5), 16) / 255;
-    const b = parseInt(hex.slice(5, 7), 16) / 255;
-    const max = Math.max(r, g, b);
-    const min = Math.min(r, g, b);
-    let h = 0;
-    let s = 0;
-    const l = (max + min) / 2;
-    if (max !== min) {
-      const d = max - min;
-      s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-      switch (max) {
-        case r:
-          h = (g - b) / d + (g < b ? 6 : 0);
-          break;
-        case g:
-          h = (b - r) / d + 2;
-          break;
-        case b:
-          h = (r - g) / d + 4;
-          break;
-      }
-      h /= 6;
-    }
-    return { h: h * 360, s: s * 100, l: l * 100 };
-  };
-  const hslToHex = (h: number, s: number, l: number): string => {
-    l /= 100;
-    s /= 100;
-    const a = s * Math.min(l, 1 - l);
-    const f = (n: number) => {
-      const k = (n + h / 30) % 12;
-      const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
-      return Math.round(255 * color)
-        .toString(16)
-        .padStart(2, "0");
-    };
-    return `#${f(0)}${f(8)}${f(4)}`;
-  };
-  const interpolateHSL = (c1: string, c2: string, t: number): string => {
-    const h1 = hexToHsl(c1);
-    const h2 = hexToHsl(c2);
-    let hue1 = h1.h;
-    let hue2 = h2.h;
-    if (hue2 - hue1 > 180) hue1 += 360;
-    else if (hue2 - hue1 < -180) hue2 += 360;
-    return hslToHex(
-      (hue1 + (hue2 - hue1) * t) % 360,
-      h1.s + (h2.s - h1.s) * t,
-      h1.l + (h2.l - h1.l) * t,
-    );
-  };
-  const getDistMeters = (p1: Point, p2: Point) => {
-    const R = 6371e3;
-    const dLat = ((p2.lat - p1.lat) * Math.PI) / 180;
-    const dLng = ((p2.lng - p1.lng) * Math.PI) / 180;
-    const a =
-      Math.sin(dLat / 2) ** 2 +
-      Math.cos((p1.lat * Math.PI) / 180) *
-        Math.cos((p2.lat * Math.PI) / 180) *
-        Math.sin(dLng / 2) ** 2;
-    return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
-  };
-  const findPerpDist = (p: Point, l1: Point, l2: Point) => {
-    if (l1.lat === l2.lat && l1.lng === l2.lng)
-      return Math.sqrt((p.lat - l1.lat) ** 2 + (p.lng - l1.lng) ** 2);
-    const num = Math.abs(
-      (l2.lng - l1.lng) * p.lat -
-        (l2.lat - l1.lat) * p.lng +
-        l2.lat * l1.lng -
-        l2.lng * l1.lat,
-    );
-    const den = Math.sqrt((l2.lng - l1.lng) ** 2 + (l2.lat - l1.lat) ** 2);
-    return num / den;
-  };
-  const rdp = (points: Point[], epsilon: number): Point[] => {
-    if (points.length <= 2) return points;
-    let dmax = 0;
-    let index = 0;
-    const end = points.length - 1;
-    for (let i = 1; i < end; i++) {
-      const d = findPerpDist(points[i], points[0], points[end]);
-      if (d > dmax) {
-        index = i;
-        dmax = d;
-      }
-    }
-    if (dmax > epsilon) {
-      const res1 = rdp(points.slice(0, index + 1), epsilon);
-      const res2 = rdp(points.slice(index), epsilon);
-      return res1.slice(0, res1.length - 1).concat(res2);
-    } else {
-      return [points[0], points[end]];
-    }
-  };
-  const saveToStorage = (key: string, value: any) => {
-    const val = JSON.stringify(value);
-    while (JSON.stringify(localStorage).length + val.length > 5242880) {
-      const ts = JSON.parse(localStorage.getItem("timestamps") || "{}");
-      const oldest = Object.entries(ts as Record<string, number>).sort(
-        (a, b) => a[1] - b[1],
-      )[0];
-      if (!oldest) break;
-      delete ts[oldest[0]];
-      Object.keys(localStorage).forEach((k) => {
-        if (k.startsWith(oldest[0])) localStorage.removeItem(k);
-      });
-      localStorage.setItem("timestamps", JSON.stringify(ts));
-    }
-    localStorage.setItem(key, val);
-  };
+  // 3. Start Recording Logic
+  if (!inGame) {
+    console.log("[PathLogger] Recording started for new round/game");
+    inGame = true;
+    // Use buffered spawn point as point 0
+    route = lastObservedSpawn ? [[lastObservedSpawn]] : [[]];
+  }
 
-  // --- State Detection ---
-  const markers: google.maps.Polyline[] = [];
-  let inGame = false;
-  let route: Point[][] = [];
-  let mapState = 0;
-  let lastObservedSpawn: Point | null = null;
+  // 4. Teleport Check
+  const currentSeg = route[route.length - 1];
+  const last = currentSeg[currentSeg.length - 1];
 
-  const isGamePage = () => {
-    const path = location.pathname;
-    return (
-      path.includes("/challenge/") ||
-      path.includes("/results/") ||
-      path.includes("/game/") ||
-      path.includes("/duels/") ||
-      path.includes("/multiplayer") ||
-      path.includes("/summary")
-    );
-  };
+  if (last && getDistMeters(last, pos) > TELEPORT_DISTANCE) {
+    // Why push anything at all?
+    route.push([]);
+  }
+  route[route.length - 1].push(pos);
+  console.log("Actually saved the Movement!");
+};
 
-  const resultShown = () => {
-    if (document.querySelector('[data-qa="result-view-bottom"]')) return true;
-    if (document.querySelector('[class*="round-score-2_root"]')) return true;
-    if (location.href.includes("results") || location.href.includes("summary"))
-      return true;
-    return false;
-  };
+const onMapUpdate = (map: google.maps.Map) => {
+  const google = window.google;
+  console.log("[PathLogger] map idle event triggered");
+  if (!isGamePage() || !google || !google.maps || !google.maps.geometry) return;
 
-  const isGameFinished = () => {
-    if (location.href.includes("results") || location.href.includes("summary"))
-      return true;
-    if (
-      document.querySelector('[data-qa="play-again-button"]') ||
-      document.querySelector('[class*="play-again-button"]')
-    )
-      return true;
-    return false;
-  };
+  // Add Round Number to checksum to handle persistent Duel pages
+  const newState =
+    (inGame ? 5 : 0) +
+    (resultShown() ? 10 : 0) +
+    (isGameFinished() ? 20 : 0) +
+    getRoundNumber();
+  if (newState === mapState) return;
+  mapState = newState;
 
-  const getGameID = () => {
-    const urlMatch = location.href.match(/\w{15,}/);
-    if (urlMatch && !location.pathname.includes("multiplayer"))
-      return urlMatch[0];
-    if (window.__GPL_GAME_ID) return window.__GPL_GAME_ID;
-    if (urlMatch) return urlMatch[0];
-    return "unknown_game";
-  };
+  markers.forEach((m) => m.setMap(null));
+  markers.length = 0;
 
-  const getRoundNumber = () => {
-    const spEl = document.querySelector("[data-qa=round-number] :nth-child(2)");
-    if (spEl) return parseInt(spEl.innerHTML);
-    const duelEl = document.querySelector<HTMLElement>(
-      '[class*="round-score-2_roundNumber"]',
-    );
-    if (duelEl) return parseInt(duelEl.innerText.replace(/\D/g, ""));
-    return 0;
-  };
+  if (resultShown()) {
+    const settings = getSettings();
+    const currentGameID = getGameID();
 
-  const onMove = (sv: google.maps.StreetViewPanorama) => {
-    console.log("[PathLogger] onMove triggered from Panorama");
-    if (!getSettings().enabled || !isGamePage()) return;
+    // SAVE Logic
+    if (inGame) {
+      const rNum = getRoundNumber();
+      const saveID = currentGameID + "-" + rNum;
+      const simplifiedRoute = route.map((segment) => rdp(segment, RDP_EPSILON));
+      const encoded = simplifiedRoute.map((p) =>
+        google.maps.geometry.encoding.encodePath(
+          p.map((x) => new google.maps.LatLng(x)),
+        ),
+      );
+      saveToStorage(saveID, encoded);
 
-    const lat = sv.getPosition()?.lat();
-    const lng = sv.getPosition()?.lng();
-    if (lat === undefined || lng === undefined) return;
-    const pos = { lat, lng };
-    console.log(
-      "[PathLogger] onMove at:",
-      pos.lat.toFixed(5),
-      pos.lng.toFixed(5),
-    );
+      const ts = JSON.parse(localStorage.timestamps || "{}");
+      ts[currentGameID] = Date.now();
+      localStorage.timestamps = JSON.stringify(ts);
 
-    // 1. Result visible? ALWAYS update spawn buffer and reset guess flag.
-    if (resultShown()) {
-      lastObservedSpawn = pos;
-      if (window.__GPL_HAS_GUESSED) window.__GPL_HAS_GUESSED = false;
-      return;
+      inGame = false;
     }
 
-    // 2. Spectating? Stop.
-    if (window.__GPL_HAS_GUESSED) return;
+    // RENDER
+    if (!settings.enabled) return;
 
-    // 3. Start Recording Logic
-    if (!inGame) {
-      console.log("[PathLogger] Recording started for new round/game");
-      inGame = true;
-      // Use buffered spawn point as point 0
-      route = lastObservedSpawn ? [[lastObservedSpawn]] : [[]];
-    }
+    // This probably shouldn't be repeated
+    // RENDER
+    if (!settings.enabled) return;
 
-    // 4. Teleport Check
-    const currentSeg = route[route.length - 1];
-    const last = currentSeg[currentSeg.length - 1];
+    const keysToShow = isGameFinished()
+      ? Object.keys(localStorage).filter(
+          (k) => k.startsWith(currentGameID) && !k.includes("timestamp"),
+        )
+      : [currentGameID + "-" + getRoundNumber()];
 
-    if (last && getDistMeters(last, pos) > TELEPORT_DISTANCE) {
-      route.push([]);
-    }
-    route[route.length - 1].push(pos);
-  };
-
-  const onMapUpdate = (map: google.maps.Map) => {
-    const google = window.google;
-    console.log("[PathLogger] map idle event triggered");
-    if (!isGamePage() || !google || !google.maps || !google.maps.geometry)
-      return;
-
-    // Add Round Number to checksum to handle persistent Duel pages
-    const newState =
-      (inGame ? 5 : 0) +
-      (resultShown() ? 10 : 0) +
-      (isGameFinished() ? 20 : 0) +
-      getRoundNumber();
-    if (newState === mapState) return;
-    mapState = newState;
-
-    markers.forEach((m) => m.setMap(null));
-    markers.length = 0;
-
-    if (resultShown()) {
-      const settings = getSettings();
-      const currentGameID = getGameID();
-
-      // SAVE Logic
-      if (inGame) {
-        const rNum = getRoundNumber();
-        const saveID = currentGameID + "-" + rNum;
-        const simplifiedRoute = route.map((segment) =>
-          rdp(segment, RDP_EPSILON),
+    keysToShow.forEach((k) => {
+      const raw = localStorage.getItem(k);
+      if (raw) {
+        const segs = (JSON.parse(raw) as string[]).map((x) =>
+          google.maps.geometry.encoding.decodePath(x),
         );
-        const encoded = simplifiedRoute.map((p) =>
-          google.maps.geometry.encoding.encodePath(
-            p.map((x) => new google.maps.LatLng(x)),
-          ),
-        );
-        saveToStorage(saveID, encoded);
-
-        const ts = JSON.parse(localStorage.timestamps || "{}");
-        ts[currentGameID] = Date.now();
-        localStorage.timestamps = JSON.stringify(ts);
-
-        inGame = false;
+        const total = segs.reduce((a, b) => a + b.length, 0);
+        let count = 0;
+        segs.forEach((path) => {
+          const step = Math.max(2, Math.ceil(total / 100));
+          for (let i = 0; i < path.length - 1; i += step - 1) {
+            const chunk = path.slice(i, i + step);
+            const t = count / (total || 1);
+            const color =
+              settings.style === "solid"
+                ? settings.solidColor
+                : t < 0.5
+                  ? interpolateHSL(
+                      settings.gradStart,
+                      settings.gradMiddle,
+                      t * 2,
+                    )
+                  : interpolateHSL(
+                      settings.gradMiddle,
+                      settings.gradEnd,
+                      (t - 0.5) * 2,
+                    );
+            markers.push(
+              new google.maps.Polyline({
+                path: chunk,
+                strokeColor: color,
+                strokeWeight: settings.thickness,
+                geodesic: true,
+                zIndex: Math.floor(t * 100),
+                clickable: false,
+              }),
+            );
+            count += chunk.length - 1;
+          }
+        });
       }
+    });
+    markers.forEach((m) => m.setMap(map));
+  }
+};
 
-      // RENDER
-      if (!settings.enabled) return;
+// --- ROBUST PROTOTYPE INTERCEPTION (Zero-Poller) ---
+const interceptConstructors = (mapsObj: typeof google.maps) => {
+  let _Map = mapsObj.Map;
+  let _StreetViewPanorama = mapsObj.StreetViewPanorama;
+  let _mapHijacked = false;
+  let _svHijacked = false;
 
-      // RENDER
-      if (!settings.enabled) return;
-
-      const keysToShow = isGameFinished()
-        ? Object.keys(localStorage).filter(
-            (k) => k.startsWith(currentGameID) && !k.includes("timestamp"),
-          )
-        : [currentGameID + "-" + getRoundNumber()];
-
-      keysToShow.forEach((k) => {
-        const raw = localStorage.getItem(k);
-        if (raw) {
-          const segs = (JSON.parse(raw) as string[]).map((x) =>
-            google.maps.geometry.encoding.decodePath(x),
-          );
-          const total = segs.reduce((a, b) => a + b.length, 0);
-          let count = 0;
-          segs.forEach((path) => {
-            const step = Math.max(2, Math.ceil(total / 100));
-            for (let i = 0; i < path.length - 1; i += step - 1) {
-              const chunk = path.slice(i, i + step);
-              const t = count / (total || 1);
-              const color =
-                settings.style === "solid"
-                  ? settings.solidColor
-                  : t < 0.5
-                    ? interpolateHSL(
-                        settings.gradStart,
-                        settings.gradMiddle,
-                        t * 2,
-                      )
-                    : interpolateHSL(
-                        settings.gradMiddle,
-                        settings.gradEnd,
-                        (t - 0.5) * 2,
-                      );
-              markers.push(
-                new google.maps.Polyline({
-                  path: chunk,
-                  strokeColor: color,
-                  strokeWeight: settings.thickness,
-                  geodesic: true,
-                  zIndex: Math.floor(t * 100),
-                  clickable: false,
-                }),
-              );
-              count += chunk.length - 1;
-            }
-          });
-        }
-      });
-      markers.forEach((m) => m.setMap(map));
+  const checkComplete = () => {
+    if (_mapHijacked && _svHijacked) {
+      window.__GPL_HIJACKED = true;
+      console.log("[PathLogger] Hijack complete. (Zero-Poller Strategy)");
     }
   };
 
-  // --- ROBUST PROTOTYPE INTERCEPTION (Zero-Poller) ---
-  const interceptConstructors = (mapsObj: typeof google.maps) => {
-    let _Map = mapsObj.Map;
-    let _StreetViewPanorama = mapsObj.StreetViewPanorama;
-    let _mapHijacked = false;
-    let _svHijacked = false;
-
-    const checkComplete = () => {
-      if (_mapHijacked && _svHijacked) {
-        window.__GPL_HIJACKED = true;
-        console.log("[PathLogger] Hijack complete. (Zero-Poller Strategy)");
+  const hijackBlueprint = (constructor: any, isSV: boolean) => {
+    const hijacked = function (this: any, ...args: any[]) {
+      console.log(
+        `[PathLogger] ${isSV ? "StreetViewPanorama" : "Map"} constructed!`,
+      );
+      const res = constructor.apply(this, args);
+      if (isSV) {
+        this.addListener("position_changed", () => onMove(this));
+      } else {
+        this.addListener("idle", () => onMapUpdate(this));
       }
+      return res;
     };
-
-    const hijackBlueprint = (constructor: any, isSV: boolean) => {
-      const hijacked = function (this: any, ...args: any[]) {
-        console.log(
-          `[PathLogger] ${isSV ? "StreetViewPanorama" : "Map"} constructed!`,
-        );
-        const res = constructor.apply(this, args);
-        if (isSV) {
-          this.addListener("position_changed", () => onMove(this));
-        } else {
-          this.addListener("idle", () => onMapUpdate(this));
-        }
-        return res;
-      };
-      hijacked.prototype = Object.create(constructor.prototype);
-      return hijacked as any;
-    };
-
-    Object.defineProperty(mapsObj, "Map", {
-      get: () => _Map,
-      set: (val) => {
-        if (!val || _mapHijacked) {
-          _Map = val;
-          return;
-        }
-        console.log("[PathLogger] Trapped Map constructor instantiation!");
-        _Map = hijackBlueprint(val, false);
-        _mapHijacked = true;
-        checkComplete();
-      },
-      configurable: true,
-      enumerable: true,
-    });
-    if (_Map && !_mapHijacked) mapsObj.Map = _Map; // Self-trigger if already defined
-
-    Object.defineProperty(mapsObj, "StreetViewPanorama", {
-      get: () => _StreetViewPanorama,
-      set: (val) => {
-        if (!val || _svHijacked) {
-          _StreetViewPanorama = val;
-          return;
-        }
-        console.log(
-          "[PathLogger] Trapped StreetViewPanorama constructor instantiation!",
-        );
-        _StreetViewPanorama = hijackBlueprint(val, true);
-        _svHijacked = true;
-        checkComplete();
-      },
-      configurable: true,
-      enumerable: true,
-    });
-    if (_StreetViewPanorama && !_svHijacked)
-      mapsObj.StreetViewPanorama = _StreetViewPanorama; // Self-trigger
+    hijacked.prototype = Object.create(constructor.prototype);
+    return hijacked as any;
   };
 
-  const interceptMaps = (googleObj: typeof google) => {
-    let _maps = googleObj.maps;
+  Object.defineProperty(mapsObj, "Map", {
+    get: () => _Map,
+    set: (val) => {
+      if (!val || _mapHijacked) {
+        _Map = val;
+        return;
+      }
+      console.log("[PathLogger] Trapped Map constructor instantiation!");
+      _Map = hijackBlueprint(val, false);
+      _mapHijacked = true;
+      checkComplete();
+    },
+    configurable: true,
+    enumerable: true,
+  });
+  if (_Map && !_mapHijacked) mapsObj.Map = _Map; // Self-trigger if already defined
 
-    Object.defineProperty(googleObj, "maps", {
-      get: () => _maps,
-      set: (val) => {
-        _maps = val;
-        if (_maps && !window.__GPL_HIJACKED) interceptConstructors(_maps);
-      },
-      configurable: true,
-      enumerable: true,
-    });
-    if (_maps && !window.__GPL_HIJACKED) interceptConstructors(_maps);
-  };
+  Object.defineProperty(mapsObj, "StreetViewPanorama", {
+    get: () => _StreetViewPanorama,
+    set: (val) => {
+      if (!val || _svHijacked) {
+        _StreetViewPanorama = val;
+        return;
+      }
+      console.log(
+        "[PathLogger] Trapped StreetViewPanorama constructor instantiation!",
+      );
+      _StreetViewPanorama = hijackBlueprint(val, true);
+      _svHijacked = true;
+      checkComplete();
+    },
+    configurable: true,
+    enumerable: true,
+  });
+  if (_StreetViewPanorama && !_svHijacked)
+    mapsObj.StreetViewPanorama = _StreetViewPanorama; // Self-trigger
+};
 
-  const setupInterceptor = () => {
-    if (window.__GPL_HIJACKED) return;
-    let _google = window.google;
+const interceptMaps = (googleObj: typeof google) => {
+  let _maps = googleObj.maps;
 
-    Object.defineProperty(window, "google", {
-      get: () => _google,
-      set: (val) => {
-        _google = val;
-        if (_google && !window.__GPL_HIJACKED) interceptMaps(_google);
-      },
-      configurable: true,
-      enumerable: true,
-    });
-    if (_google && !window.__GPL_HIJACKED) interceptMaps(_google);
-    console.log(
-      "[PathLogger] Setup active property traps for Google Maps instantiation.",
-    );
-  };
+  Object.defineProperty(googleObj, "maps", {
+    get: () => _maps,
+    set: (val) => {
+      _maps = val;
+      if (_maps && !window.__GPL_HIJACKED) interceptConstructors(_maps);
+    },
+    configurable: true,
+    enumerable: true,
+  });
+  if (_maps && !window.__GPL_HIJACKED) interceptConstructors(_maps);
+};
 
-  // Begin trapping immediately!
-  setupInterceptor();
-}); // closes runAsClient
+const setupInterceptor = () => {
+  if (window.__GPL_HIJACKED) return;
+  let _google = window.google;
+
+  Object.defineProperty(window, "google", {
+    get: () => _google,
+    set: (val) => {
+      _google = val;
+      if (_google && !window.__GPL_HIJACKED) interceptMaps(_google);
+    },
+    configurable: true,
+    enumerable: true,
+  });
+  if (_google && !window.__GPL_HIJACKED) interceptMaps(_google);
+  console.log(
+    "[PathLogger] Setup active property traps for Google Maps instantiation.",
+  );
+};
+
+// Begin trapping immediately!
+setupInterceptor();
