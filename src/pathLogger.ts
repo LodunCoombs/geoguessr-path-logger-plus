@@ -11,7 +11,6 @@ interface AppState {
 // --- PART 1: IMMEDIATE EXECUTION (Network & UI) ---
 console.log("[PathLogger] Script Part 1: Immediate Execution started");
 window.__GPL_GAME_ID = null;
-window.__GPL_HAS_GUESSED = false;
 
 (function surgicalWebSocketHook() {
   const origAddEventListener = WebSocket.prototype.addEventListener;
@@ -64,74 +63,6 @@ window.__GPL_HAS_GUESSED = false;
     "function addEventListener() { [native code] }";
 })();
 
-const checkURL = (input: any): void => {
-  if (!input) return;
-
-  // The input is technically only a string I think.
-  let urlString: string;
-
-  if (typeof input === "string") {
-    urlString = input;
-    // These else if checks might be unnecessary
-  } else if (input instanceof URL) {
-    urlString = input.href;
-  } else if (input instanceof Request) {
-    urlString = input.url;
-  } else {
-    console.warn("URL Invalid!");
-    return;
-  }
-
-  // This will print every URL.
-  // console.log("[PathLogger] Checking URL:", urlString);
-
-  // This entire block should probably eventually be removed.
-  // I don't think it successfully is intercepting requests, we can function without it.
-  if (urlString.includes("/api/lobby/") && urlString.includes("/join")) {
-    console.log("[PathLogger] Traditional way. Joined Game!");
-    // Can potentially be cleaner with destructuring or optional chaining
-    const match = urlString.match(/\/api\/lobby\/([0-9a-f]{24})\/join/);
-    if (match && match[1]) {
-      // Need to check if this works. I feel like the game ID isn't being found in multiplayer
-      // Maybe we can get the game ID from the websocket response instead?
-      console.log(
-        `[PathLogger] Traditional Way. Joined Game! Game ID: ${match[1]}. Setting round to 1!`,
-      );
-      window.__GPL_GAME_ID = match[1];
-      window.__GPL_HAS_GUESSED = false;
-      // I guess there is an edge case, if they rejoin the lobby, and it's actually already mid game/round 4.
-      // Might be possible to fix by intercepting the "Reconnect" request, I'll leave this for now
-      // It's set to round 1 by default anyway, not necessary
-      window.__WS_ROUND = 1;
-    }
-  }
-  // This is outdated, we should remove the /guess logic
-  // We now determine if we are spectating by scanning the DOM.
-  if (urlString.endsWith("/guess")) {
-    window.__GPL_HAS_GUESSED = true;
-    console.warn("HAS GUESSED");
-  }
-};
-
-// I don't think these actually attach fast enough. We might be able to fully remove these
-// two fetch/XHR hijackers. Our websocket approach has mostly replaced the need for normal http interception.
-const originalFetch = window.fetch;
-window.fetch = function (this: typeof window, ...args: any[]) {
-  if (args[0]) checkURL(args[0]);
-  return originalFetch.apply(
-    this,
-    args as [RequestInfo | URL, RequestInit | undefined],
-  );
-};
-
-const originalOpen = XMLHttpRequest.prototype.open;
-XMLHttpRequest.prototype.open = function (
-  this: XMLHttpRequest,
-  ...args: any[]
-) {
-  checkURL(args[1]);
-  return (originalOpen as any).apply(this, args);
-};
 
 const SETTINGS_KEY = "pl_settings_v2";
 let state: AppState = {
@@ -758,19 +689,16 @@ const onMove = (sv: google.maps.StreetViewPanorama) => {
     pos.lng.toFixed(5),
   );
 
-  // 1. Result visible? ALWAYS update spawn buffer and reset guess flag.
+  // Result visible? Update spawn buffer.
   if (resultShown()) {
     lastObservedSpawn = pos;
-    if (window.__GPL_HAS_GUESSED) window.__GPL_HAS_GUESSED = false;
-    console.log("Reset Guessed Status, Results Screen Detected!");
+    console.log("Reset Spawn Point, Results Screen Detected!");
     return;
   }
 
   // Spectating? Stop.
-  // Again, can probably remove this HAS_GUESSED logic
-  if (window.__GPL_HAS_GUESSED) return;
   if (isSpectating()) return;
-  console.log("Moved, and has not guessed!");
+  console.log("Moved, and is not spectating!");
 
   // Start Recording Logic
   if (!inGame) {
