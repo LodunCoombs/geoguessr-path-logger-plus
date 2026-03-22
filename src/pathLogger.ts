@@ -8,23 +8,71 @@ interface AppState {
   thickness: number;
 }
 
-setInterval(() => {
-  isSpectating();
-}, 1000);
-
 // --- PART 1: IMMEDIATE EXECUTION (Network & UI) ---
 console.log("[PathLogger] Script Part 1: Immediate Execution started");
 window.__GPL_GAME_ID = null;
 window.__GPL_HAS_GUESSED = false;
 
+(function surgicalWebSocketHook() {
+  const origAddEventListener = WebSocket.prototype.addEventListener;
+  WebSocket.prototype.addEventListener = function (
+    this: WebSocket,
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | AddEventListenerOptions,
+  ) {
+    if (type === "message") {
+      const wrappedListener = function (this: WebSocket, ...args: any[]) {
+        const event = args[0] as MessageEvent;
+        try {
+          const data = JSON.parse(event.data);
+          if (data.code === "DuelNewRound") {
+            console.log(
+              "[PathLogger] Duel new round! Round number:",
+              data.duel.state.currentRoundNumber,
+            );
+            window.__WS_ROUND = data.duel.state.currentRoundNumber;
+          }
+          if (data.code === "DuelStarted") {
+            console.log(
+              "[PathLogger] Duel started! Game ID:",
+              data.duel.state.gameId,
+            );
+            window.__GPL_GAME_ID = data.duel.state.gameId;
+          }
+        } catch {
+          // Ignore parsing errors for non-JSON payloads
+        }
+        if (typeof listener === "function") {
+          return listener.apply(this, args as [any]);
+        } else {
+          return listener.handleEvent(event);
+        }
+      };
+      return origAddEventListener.call(
+        this,
+        type,
+        wrappedListener as EventListenerOrEventListenerObject,
+        options,
+      );
+    }
+    return origAddEventListener.call(this, type, listener, options);
+  };
+  console.log("[PathLogger] Intercepted Websockets");
+  WebSocket.prototype.addEventListener.toString = () =>
+    // This is likely unnecessary
+    "function addEventListener() { [native code] }";
+})();
+
 const checkURL = (input: any): void => {
   if (!input) return;
 
-  // The input is technically only a string.
+  // The input is technically only a string I think.
   let urlString: string;
 
   if (typeof input === "string") {
     urlString = input;
+    // These else if checks might be unnecessary
   } else if (input instanceof URL) {
     urlString = input.href;
   } else if (input instanceof Request) {
@@ -37,20 +85,36 @@ const checkURL = (input: any): void => {
   // This will print every URL.
   // console.log("[PathLogger] Checking URL:", urlString);
 
+  // This entire block should probably eventually be removed.
+  // I don't think it successfully is intercepting requests, we can function without it.
   if (urlString.includes("/api/lobby/") && urlString.includes("/join")) {
+    console.log("[PathLogger] Traditional way. Joined Game!");
     // Can potentially be cleaner with destructuring or optional chaining
     const match = urlString.match(/\/api\/lobby\/([0-9a-f]{24})\/join/);
     if (match && match[1]) {
+      // Need to check if this works. I feel like the game ID isn't being found in multiplayer
+      // Maybe we can get the game ID from the websocket response instead?
+      console.log(
+        `[PathLogger] Traditional Way. Joined Game! Game ID: ${match[1]}. Setting round to 1!`,
+      );
       window.__GPL_GAME_ID = match[1];
       window.__GPL_HAS_GUESSED = false;
+      // I guess there is an edge case, if they rejoin the lobby, and it's actually already mid game/round 4.
+      // Might be possible to fix by intercepting the "Reconnect" request, I'll leave this for now
+      // It's set to round 1 by default anyway, not necessary
+      window.__WS_ROUND = 1;
     }
   }
+  // This is outdated, we should remove the /guess logic
+  // We now determine if we are spectating by scanning the DOM.
   if (urlString.endsWith("/guess")) {
     window.__GPL_HAS_GUESSED = true;
     console.warn("HAS GUESSED");
   }
 };
 
+// I don't think these actually attach fast enough. We might be able to fully remove these
+// two fetch/XHR hijackers. Our websocket approach has mostly replaced the need for normal http interception.
 const originalFetch = window.fetch;
 window.fetch = function (this: typeof window, ...args: any[]) {
   if (args[0]) checkURL(args[0]);
@@ -455,8 +519,7 @@ const uiObserver = new MutationObserver(injectButton);
 uiObserver.observe(document.body, { childList: true, subtree: true });
 
 // --- PART 2: MAP LOGIC ---
-console.log("[PathLogger] Script Part 2: Initializing robust map hook...");
-console.log("[PathLogger] runAsClient (Part 2) executing");
+console.log("[PathLogger] Step 2: Map Logic Initializing...");
 const RDP_EPSILON = 0.00002;
 const TELEPORT_DISTANCE = 120;
 
@@ -598,13 +661,45 @@ const saveToStorage = (key: string, value: any) => {
   localStorage.setItem(key, val);
 };
 
+const decodePath = (encoded: string): google.maps.LatLng[] => {
+  if (window.google?.maps?.geometry?.encoding) {
+    return window.google.maps.geometry.encoding.decodePath(encoded);
+  }
+  console.log("Google maps encoding not found, using fallback.");
+  const len = encoded.length;
+  let index = 0;
+  const array: google.maps.LatLng[] = [];
+  let lat = 0;
+  let lng = 0;
+
+  while (index < len) {
+    let b: number;
+    let shift = 0;
+    let result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    const dlat = result & 1 ? ~(result >> 1) : result >> 1;
+    lat += dlat;
+
+    shift = 0;
+    result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    const dlng = result & 1 ? ~(result >> 1) : result >> 1;
+    lng += dlng;
+
+    array.push(new window.google.maps.LatLng(lat * 1e-5, lng * 1e-5));
+  }
+  return array;
+};
+
 // --- State Detection ---
-// This needs to be updated
-// Doesn't work with duels.
-// Issues:
-// 1. Tracking opponent when spectating them
-// 2. Not rendering on map between rounds
-// I suspect Geoguessr may have changed their website
 const markers: google.maps.Polyline[] = [];
 let inGame = false;
 let route: Point[][] = [];
@@ -622,15 +717,6 @@ const isGamePage = () => {
     path.includes("/summary")
   );
 };
-
-// const resultShown = () => {
-//   // What is location, where is it from?
-//   if (document.querySelector('[data-qa="result-view-bottom"]')) return true;
-//   if (document.querySelector('[class*="round-score-2_root"]')) return true;
-//   if (location.href.includes("results") || location.href.includes("summary"))
-//     return true;
-//   return false;
-// };
 
 const resultShown = () => {
   // Single player, final summaries, etc.
@@ -669,7 +755,10 @@ const isGameFinished = () => {
 };
 
 const isSpectating = () => {
-  if (document.querySelector('[class*="post-guess-player-spectator_root"]')) {
+  if (
+    document.querySelector('[class*="post-guess-player-spectator_root"]') ||
+    location.href.includes("/replay")
+  ) {
     console.log("Currently spectating, so I'm not going to record the path.");
     return true;
   }
@@ -691,13 +780,22 @@ const getGameID = () => {
 };
 
 const getRoundNumber = () => {
+  // Within the div, the text looks like "1" " / " "5"
   const spEl = document.querySelector("[data-qa=round-number] :nth-child(2)");
   if (spEl) return parseInt(spEl.innerHTML);
-  const duelEl = document.querySelector<HTMLElement>(
-    '[class*="round-score-2_roundNumber"]',
-  );
+  const duelEl =
+    document.querySelector<HTMLElement>(
+      '[class*="round-score-2_roundNumber"]',
+    ) ||
+    // Should theoretically now fix the issue with not tracking round number in duels
+    document.querySelector<HTMLElement>('[class*="round-score_roundNumber"]');
   if (duelEl) return parseInt(duelEl.innerText.replace(/\D/g, ""));
-  return 0;
+
+  if (window.__WS_ROUND) return window.__WS_ROUND;
+
+  // Default to round 1.
+  // Duels don't recieve the current round number through WebSockets until round 2 and after.
+  return 1;
 };
 
 const onMove = (sv: google.maps.StreetViewPanorama) => {
@@ -722,12 +820,13 @@ const onMove = (sv: google.maps.StreetViewPanorama) => {
     return;
   }
 
-  // 2. Spectating? Stop.
+  // Spectating? Stop.
+  // Again, can probably remove this HAS_GUESSED logic
   if (window.__GPL_HAS_GUESSED) return;
   if (isSpectating()) return;
   console.log("Moved, and has not guessed!");
 
-  // 3. Start Recording Logic
+  // Start Recording Logic
   if (!inGame) {
     console.log("[PathLogger] Recording started for new round/game");
     inGame = true;
@@ -748,11 +847,18 @@ const onMove = (sv: google.maps.StreetViewPanorama) => {
 };
 
 const onMapUpdate = (map: google.maps.Map) => {
+  // Does it re-render path EVERY time an idle event occurs? This could be improved.
   const google = window.google;
   console.log("[PathLogger] map idle event triggered");
-  if (!isGamePage() || !google || !google.maps || !google.maps.geometry) return;
+  if (!isGamePage()) {
+    console.log("Not a Game Page, or map invalid! Not rendering path.");
+    return;
+  } else {
+    console.log("Game page detected!");
+  }
 
   // Add Round Number to checksum to handle persistent Duel pages
+  // This seems a bit hard to understand, might be a cleaner way
   const newState =
     (inGame ? 5 : 0) +
     (resultShown() ? 10 : 0) +
@@ -771,6 +877,7 @@ const onMapUpdate = (map: google.maps.Map) => {
     // SAVE Logic
     if (inGame) {
       const rNum = getRoundNumber();
+      console.log("[PathLogger] Saving path for Round " + rNum);
       const saveID = currentGameID + "-" + rNum;
       const simplifiedRoute = route.map((segment) => rdp(segment, RDP_EPSILON));
       const encoded = simplifiedRoute.map((p) =>
@@ -790,10 +897,6 @@ const onMapUpdate = (map: google.maps.Map) => {
     // RENDER
     if (!settings.enabled) return;
 
-    // This probably shouldn't be repeated
-    // RENDER
-    if (!settings.enabled) return;
-
     const keysToShow = isGameFinished()
       ? Object.keys(localStorage).filter(
           (k) => k.startsWith(currentGameID) && !k.includes("timestamp"),
@@ -803,9 +906,7 @@ const onMapUpdate = (map: google.maps.Map) => {
     keysToShow.forEach((k) => {
       const raw = localStorage.getItem(k);
       if (raw) {
-        const segs = (JSON.parse(raw) as string[]).map((x) =>
-          google.maps.geometry.encoding.decodePath(x),
-        );
+        const segs = (JSON.parse(raw) as string[]).map((x) => decodePath(x));
         const total = segs.reduce((a, b) => a + b.length, 0);
         let count = 0;
         segs.forEach((path) => {
@@ -846,108 +947,70 @@ const onMapUpdate = (map: google.maps.Map) => {
   }
 };
 
-// --- ROBUST PROTOTYPE INTERCEPTION (Zero-Poller) ---
-const interceptConstructors = (mapsObj: typeof google.maps) => {
-  let _Map = mapsObj.Map;
-  let _StreetViewPanorama = mapsObj.StreetViewPanorama;
-  let _mapHijacked = false;
-  let _svHijacked = false;
+const setupMVCInterceptor = () => {
+  // Wait for the Google Maps API to actually load into the window.
+  // Using a fast interval ensures it works whether we are early or late.
+  const timer = setInterval(() => {
+    const MVCObject = window.google?.maps?.MVCObject;
+    if (!MVCObject) return; // Keep waiting...
 
-  const checkComplete = () => {
-    if (_mapHijacked && _svHijacked) {
-      window.__GPL_HIJACKED = true;
-      console.log("[PathLogger] Hijack complete. (Zero-Poller Strategy)");
-    }
-  };
+    clearInterval(timer);
+    if (window.__GPL_HIJACKED) return; // Prevent double injection
+    window.__GPL_HIJACKED = true;
 
-  const hijackBlueprint = (constructor: any, isSV: boolean) => {
-    const hijacked = function (this: any, ...args: any[]) {
-      console.log(
-        `[PathLogger] ${isSV ? "StreetViewPanorama" : "Map"} constructed!`,
-      );
-      const res = constructor.apply(this, args);
-      if (isSV) {
-        this.addListener("position_changed", () => onMove(this));
-      } else {
-        this.addListener("idle", () => onMapUpdate(this));
+    console.log(
+      "[PathLogger] Google Maps API found. Setting MVCObject trap...",
+    );
+
+    const originalSet = MVCObject.prototype.set;
+
+    // Hijack the central communication hub
+    MVCObject.prototype.set = function (this: any, key: string, value: any) {
+      // Always execute the original function first so the map state is correct
+      const res = originalSet.apply(this, [key, value]);
+
+      // If we already trapped this specific instance, do nothing else.
+      // MVCObject.set fires thousands of times. This keeps performance perfect.
+      if (this.__GPL_TRACKED) return res;
+
+      // Identify if the object currently talking is a Map
+      if (
+        typeof this.setZoom === "function" &&
+        typeof this.getBounds === "function"
+      ) {
+        console.log("[PathLogger] Map captured via MVCObject!");
+        this.__GPL_TRACKED = true; // Tag it so we don't trap it again
+
+        this.addListener("idle", () => onMapUpdate(this as google.maps.Map));
+
+        // If we arrived late, it might already be fully loaded and idle.
+        // If it has bounds, it's alive. Trigger the update manually to catch up.
+        if (this.getBounds()) {
+          onMapUpdate(this as google.maps.Map);
+        }
       }
+      // Identify if the object currently talking is a StreetViewPanorama
+      else if (
+        typeof this.setPano === "function" &&
+        typeof this.getPosition === "function"
+      ) {
+        console.log("[PathLogger] StreetViewPanorama captured via MVCObject!");
+        this.__GPL_TRACKED = true; // Tag it
+
+        this.addListener("position_changed", () =>
+          onMove(this as google.maps.StreetViewPanorama),
+        );
+
+        // If late, and it already has a position, trigger manually.
+        if (this.getPosition()) {
+          onMove(this as google.maps.StreetViewPanorama);
+        }
+      }
+
       return res;
     };
-    hijacked.prototype = Object.create(constructor.prototype);
-    return hijacked as any;
-  };
-
-  Object.defineProperty(mapsObj, "Map", {
-    get: () => _Map,
-    set: (val) => {
-      if (!val || _mapHijacked) {
-        _Map = val;
-        return;
-      }
-      console.log("[PathLogger] Trapped Map constructor instantiation!");
-      _Map = hijackBlueprint(val, false);
-      _mapHijacked = true;
-      checkComplete();
-    },
-    configurable: true,
-    enumerable: true,
-  });
-  if (_Map && !_mapHijacked) mapsObj.Map = _Map; // Self-trigger if already defined
-
-  Object.defineProperty(mapsObj, "StreetViewPanorama", {
-    get: () => _StreetViewPanorama,
-    set: (val) => {
-      if (!val || _svHijacked) {
-        _StreetViewPanorama = val;
-        return;
-      }
-      console.log(
-        "[PathLogger] Trapped StreetViewPanorama constructor instantiation!",
-      );
-      _StreetViewPanorama = hijackBlueprint(val, true);
-      _svHijacked = true;
-      checkComplete();
-    },
-    configurable: true,
-    enumerable: true,
-  });
-  if (_StreetViewPanorama && !_svHijacked)
-    mapsObj.StreetViewPanorama = _StreetViewPanorama; // Self-trigger
+  }, 10);
 };
 
-const interceptMaps = (googleObj: typeof google) => {
-  let _maps = googleObj.maps;
-
-  Object.defineProperty(googleObj, "maps", {
-    get: () => _maps,
-    set: (val) => {
-      _maps = val;
-      if (_maps && !window.__GPL_HIJACKED) interceptConstructors(_maps);
-    },
-    configurable: true,
-    enumerable: true,
-  });
-  if (_maps && !window.__GPL_HIJACKED) interceptConstructors(_maps);
-};
-
-const setupInterceptor = () => {
-  if (window.__GPL_HIJACKED) return;
-  let _google = window.google;
-
-  Object.defineProperty(window, "google", {
-    get: () => _google,
-    set: (val) => {
-      _google = val;
-      if (_google && !window.__GPL_HIJACKED) interceptMaps(_google);
-    },
-    configurable: true,
-    enumerable: true,
-  });
-  if (_google && !window.__GPL_HIJACKED) interceptMaps(_google);
-  console.log(
-    "[PathLogger] Setup active property traps for Google Maps instantiation.",
-  );
-};
-
-// Begin trapping immediately!
-setupInterceptor();
+// Begin waiting immediately
+setupMVCInterceptor();
