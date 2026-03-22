@@ -153,8 +153,8 @@ function saveSettings() {
 }
 loadSettings();
 
-// Do we need both HexToHsl and HslToHex? Can we just use one?
-function uiHexToHsl(hex: string) {
+// --- Color Helpers ---
+const hexToHsl = (hex: string) => {
   const r = parseInt(hex.slice(1, 3), 16) / 255;
   const g = parseInt(hex.slice(3, 5), 16) / 255;
   const b = parseInt(hex.slice(5, 7), 16) / 255;
@@ -180,8 +180,9 @@ function uiHexToHsl(hex: string) {
     h /= 6;
   }
   return { h: h * 360, s: s * 100, l: l * 100 };
-}
-const uiHslToHex = (h: number, s: number, l: number): string => {
+};
+
+const hslToHex = (h: number, s: number, l: number): string => {
   l /= 100;
   s /= 100;
   const a = s * Math.min(l, 1 - l);
@@ -194,15 +195,15 @@ const uiHslToHex = (h: number, s: number, l: number): string => {
   };
   return `#${f(0)}${f(8)}${f(4)}`;
 };
-// Returns a hex color that is t% of the way between c1 and c2
-const uiInterpolateHSL = (c1: string, c2: string, t: number): string => {
-  const h1 = uiHexToHsl(c1);
-  const h2 = uiHexToHsl(c2);
+
+const interpolateHSL = (c1: string, c2: string, t: number): string => {
+  const h1 = hexToHsl(c1);
+  const h2 = hexToHsl(c2);
   let hue1 = h1.h;
   let hue2 = h2.h;
   if (hue2 - hue1 > 180) hue1 += 360;
   else if (hue2 - hue1 < -180) hue2 += 360;
-  return uiHslToHex(
+  return hslToHex(
     (hue1 + (hue2 - hue1) * t) % 360,
     h1.s + (h2.s - h1.s) * t,
     h1.l + (h2.l - h1.l) * t,
@@ -357,8 +358,8 @@ function updateUI() {
       const t = i / 40;
       const color =
         t < 0.5
-          ? uiInterpolateHSL(state.gradStart, state.gradMiddle, t * 2)
-          : uiInterpolateHSL(state.gradMiddle, state.gradEnd, (t - 0.5) * 2);
+          ? interpolateHSL(state.gradStart, state.gradMiddle, t * 2)
+          : interpolateHSL(state.gradMiddle, state.gradEnd, (t - 0.5) * 2);
       const pos = (t * 100).toFixed(1) + "%";
       gradStr += `${color} ${pos}${i < 40 ? ", " : ")"}`;
       const stop = document.createElementNS(
@@ -546,61 +547,6 @@ const getSettings = (): AppState => {
   }
 };
 
-// --- Helpers ---
-// Wait, didn't we already define this in part 1?
-const hexToHsl = (hex: string) => {
-  const r = parseInt(hex.slice(1, 3), 16) / 255;
-  const g = parseInt(hex.slice(3, 5), 16) / 255;
-  const b = parseInt(hex.slice(5, 7), 16) / 255;
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  let h = 0;
-  let s = 0;
-  const l = (max + min) / 2;
-  if (max !== min) {
-    const d = max - min;
-    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-    switch (max) {
-      case r:
-        h = (g - b) / d + (g < b ? 6 : 0);
-        break;
-      case g:
-        h = (b - r) / d + 2;
-        break;
-      case b:
-        h = (r - g) / d + 4;
-        break;
-    }
-    h /= 6;
-  }
-  return { h: h * 360, s: s * 100, l: l * 100 };
-};
-const hslToHex = (h: number, s: number, l: number): string => {
-  l /= 100;
-  s /= 100;
-  const a = s * Math.min(l, 1 - l);
-  const f = (n: number) => {
-    const k = (n + h / 30) % 12;
-    const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
-    return Math.round(255 * color)
-      .toString(16)
-      .padStart(2, "0");
-  };
-  return `#${f(0)}${f(8)}${f(4)}`;
-};
-const interpolateHSL = (c1: string, c2: string, t: number): string => {
-  const h1 = hexToHsl(c1);
-  const h2 = hexToHsl(c2);
-  let hue1 = h1.h;
-  let hue2 = h2.h;
-  if (hue2 - hue1 > 180) hue1 += 360;
-  else if (hue2 - hue1 < -180) hue2 += 360;
-  return hslToHex(
-    (hue1 + (hue2 - hue1) * t) % 360,
-    h1.s + (h2.s - h1.s) * t,
-    h1.l + (h2.l - h1.l) * t,
-  );
-};
 const getDistMeters = (p1: Point, p2: Point) => {
   const R = 6371e3;
   const dLat = ((p2.lat - p1.lat) * Math.PI) / 180;
