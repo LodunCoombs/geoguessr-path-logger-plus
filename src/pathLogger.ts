@@ -73,6 +73,7 @@ const DEFAULT_STATE: AppState = {
 };
 
 let state: AppState = { ...DEFAULT_STATE };
+let capturedMap: google.maps.Map | null = null;
 
 function loadSettings() {
   try {
@@ -306,6 +307,8 @@ function updateUI() {
   }
 
   saveSettings();
+  mapState = "";
+  if (capturedMap) onMapUpdate(capturedMap);
 }
 
 const showModal = () => {
@@ -810,6 +813,7 @@ const setupMVCInterceptor = () => {
       ) {
         console.log("[PathLogger] Map captured via MVCObject!");
         this.__GPL_TRACKED = true; // Tag it so we don't trap it again
+        capturedMap = this as google.maps.Map;
 
         this.addListener("idle", () => onMapUpdate(this as google.maps.Map));
 
