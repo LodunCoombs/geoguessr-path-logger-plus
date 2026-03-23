@@ -12,6 +12,7 @@ Add a toggle to the settings UI to enable debug mode. Which, enables all the con
 We could even technically add UI to select what to log, and what not to log. Like check boxes.
 
 Simplified route means we don't get full gradients. Perhaps we can artificially increase the number of segments, to ensure full gradients every time.
+Like, have a minimum of 10-20 segments. It still looks simplified, but with a gradient.
 
 Potential issue. Might need to check for an element on the end of duel page, that shows the last round temporarily. Right now, might not be rendering last round of duel,
 until you go into the game summary page.

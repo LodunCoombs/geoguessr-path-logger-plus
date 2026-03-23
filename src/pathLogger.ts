@@ -1,5 +1,4 @@
 interface AppState {
-  enabled: boolean;
   style: string;
   solidColor: string;
   gradStart: string;
@@ -65,7 +64,6 @@ window.__GPL_GAME_ID = null;
 
 const SETTINGS_KEY = "pl_settings_v2";
 const DEFAULT_STATE: AppState = {
-  enabled: true,
   style: "gradient",
   solidColor: "#ff0000",
   gradStart: "#22c55e",
@@ -226,10 +224,6 @@ backdrop.innerHTML = `
         <div id="pl-modal">
             <div class="pl-header"><h2>Path Logger Settings</h2><p>Customize your GeoGuessr path visualization</p></div>
             <div class="pl-content">
-                <div class="pl-row">
-                    <div class="pl-section"><span class="pl-title" style="margin:0">Enable Path Logger</span><p style="margin:2px 0 0 0; font-size:13px; color:var(--pl-dim)">Show path on the map</p></div>
-                    <label class="pl-switch"><input type="checkbox" id="pl-enable-toggle" ${state.enabled ? "checked" : ""}><span class="pl-slider-round"></span></label>
-                </div>
                 <div class="pl-section"><h3 class="pl-title">Line Style</h3><div class="pl-btn-group"><button class="pl-btn-toggle" id="pl-style-solid">Solid</button><button class="pl-btn-toggle" id="pl-style-grad">Gradient</button></div></div>
                 <div id="pl-grad-ui" class="pl-section">
                     <h3 class="pl-title">Gradient Colors</h3>
@@ -347,18 +341,6 @@ const injectUI = () => {
         updateUI();
       }),
   );
-  // Should we even have an enable toggle? Being real, they can just disable the userscript.
-  // And, if they accidentally disable it, they could be confused.
-  // Something like a "Debug Mode" toggle seems more useful, could replace it.
-  const enableToggle = document.getElementById(
-    "pl-enable-toggle",
-  ) as HTMLInputElement | null;
-  if (enableToggle) {
-    enableToggle.onchange = (e) => {
-      state.enabled = (e.target as HTMLInputElement).checked;
-      saveSettings();
-    };
-  }
   const styleSolidBtn = document.getElementById("pl-style-solid");
   if (styleSolidBtn) {
     styleSolidBtn.onclick = () => {
@@ -578,7 +560,7 @@ const isGamePage = () => {
 const resultShown = () => {
   // Single player, final summaries, etc.
   if (document.querySelector('[data-qa="result-view-bottom"]')) {
-    console.log("Found result-view-bottom screen! Rendering path.");
+    console.log("Found result-view-bottom screen");
     return true;
   }
   // Duels Round Result
@@ -657,7 +639,9 @@ const getRoundNumber = () => {
 
 const onMove = (sv: google.maps.StreetViewPanorama) => {
   console.log("[PathLogger] onMove triggered from Panorama");
-  if (!state.enabled || !isGamePage()) return;
+  const isMoving = sv.get("clickToGo") as boolean;
+  console.warn("isMoving", isMoving);
+  if (!isGamePage() || !isMoving) return;
 
   const lat = sv.getPosition()?.lat();
   const lng = sv.getPosition()?.lng();
@@ -742,7 +726,6 @@ const onMapUpdate = (map: google.maps.Map) => {
     }
 
     // RENDER
-    if (!settings.enabled) return;
 
     const keysToShow = isGameFinished()
       ? Object.keys(localStorage).filter(
