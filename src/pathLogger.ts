@@ -8,7 +8,7 @@ interface AppState {
   thickness: number;
 }
 
-// --- PART 1: IMMEDIATE EXECUTION (Network & UI) ---
+// --- PART 1: IMMEDIATE EXECUTION (Websockets & UI) ---
 console.log("[PathLogger] Script Part 1: Immediate Execution started");
 window.__GPL_GAME_ID = null;
 
@@ -62,7 +62,6 @@ window.__GPL_GAME_ID = null;
     // This is likely unnecessary
     "function addEventListener() { [native code] }";
 })();
-
 
 const SETTINGS_KEY = "pl_settings_v2";
 let state: AppState = {
@@ -242,49 +241,36 @@ backdrop.innerHTML = `
         </div>
     `;
 
+const syncValue = (id: string, color: string) => {
+  const swatch = document.getElementById(`pl-swatch-${id}`);
+  const picker = document.getElementById(`pl-pick-${id}`) as HTMLInputElement;
+  if (swatch) swatch.style.backgroundColor = color;
+  if (picker) picker.value = color;
+};
+
 function updateUI() {
-  const solidUI = document.getElementById("pl-solid-ui");
-  const gradUI = document.getElementById("pl-grad-ui");
-  const styleSolid = document.getElementById("pl-style-solid");
-  const styleGrad = document.getElementById("pl-style-grad");
-  const swatchStart = document.getElementById("pl-swatch-start");
-  const swatchMid = document.getElementById("pl-swatch-mid");
-  const swatchEnd = document.getElementById("pl-swatch-end");
-  const swatchSolid = document.getElementById("pl-swatch-solid");
-  const pickStart = document.getElementById(
-    "pl-pick-start",
-  ) as HTMLInputElement;
-  const pickMid = document.getElementById("pl-pick-mid") as HTMLInputElement;
-  const pickEnd = document.getElementById("pl-pick-end") as HTMLInputElement;
-  const pickSolid = document.getElementById(
-    "pl-pick-solid",
-  ) as HTMLInputElement;
-  const gradBar = document.getElementById("pl-grad-bar");
-  const thickVal = document.getElementById("pl-thick-val");
-  const svgPath = document.getElementById("pl-svg-path");
+  const isGrad = state.style === "gradient";
 
-  if (solidUI)
-    solidUI.classList.toggle("pl-hidden", state.style === "gradient");
-  if (gradUI) gradUI.classList.toggle("pl-hidden", state.style === "solid");
-  if (styleSolid)
-    styleSolid.classList.toggle("active", state.style === "solid");
-  if (styleGrad)
-    styleGrad.classList.toggle("active", state.style === "gradient");
+  // Toggle UI sections & buttons
+  document.getElementById("pl-solid-ui")?.classList.toggle("pl-hidden", isGrad);
+  document.getElementById("pl-grad-ui")?.classList.toggle("pl-hidden", !isGrad);
+  document
+    .getElementById("pl-style-solid")
+    ?.classList.toggle("active", !isGrad);
+  document.getElementById("pl-style-grad")?.classList.toggle("active", isGrad);
 
-  if (swatchStart) swatchStart.style.backgroundColor = state.gradStart;
-  if (swatchMid) swatchMid.style.backgroundColor = state.gradMiddle;
-  if (swatchEnd) swatchEnd.style.backgroundColor = state.gradEnd;
-  if (swatchSolid) swatchSolid.style.backgroundColor = state.solidColor;
+  // Sync color swatches and pickers
+  syncValue("start", state.gradStart);
+  syncValue("mid", state.gradMiddle);
+  syncValue("end", state.gradEnd);
+  syncValue("solid", state.solidColor);
 
-  if (pickStart) pickStart.value = state.gradStart;
-  if (pickMid) pickMid.value = state.gradMiddle;
-  if (pickEnd) pickEnd.value = state.gradEnd;
-  if (pickSolid) pickSolid.value = state.solidColor;
-
-  let gradStr = "linear-gradient(to right, ";
+  // Update Gradient Bars & SVG Previews
   const svgGrad = document.getElementById("pl-svg-grad");
+  const gradBar = document.getElementById("pl-grad-bar");
   if (svgGrad) {
     svgGrad.innerHTML = "";
+    let gradStr = "linear-gradient(to right, ";
     for (let i = 0; i <= 40; i++) {
       const t = i / 40;
       const color =
@@ -293,6 +279,7 @@ function updateUI() {
           : interpolateHSL(state.gradMiddle, state.gradEnd, (t - 0.5) * 2);
       const pos = (t * 100).toFixed(1) + "%";
       gradStr += `${color} ${pos}${i < 40 ? ", " : ")"}`;
+
       const stop = document.createElementNS(
         "http://www.w3.org/2000/svg",
         "stop",
@@ -301,16 +288,21 @@ function updateUI() {
       stop.setAttribute("stop-color", color);
       svgGrad.appendChild(stop);
     }
+    if (gradBar) gradBar.style.background = gradStr;
   }
-  if (gradBar) gradBar.style.background = gradStr;
+
+  const thickVal = document.getElementById("pl-thick-val");
   if (thickVal) thickVal.innerText = state.thickness + "px";
+
+  const svgPath = document.getElementById("pl-svg-path");
   if (svgPath) {
     svgPath.setAttribute("stroke-width", state.thickness.toString());
     svgPath.setAttribute(
       "stroke",
-      state.style === "solid" ? state.solidColor : "url(#pl-svg-grad)",
+      isGrad ? "url(#pl-svg-grad)" : state.solidColor,
     );
   }
+
   saveSettings();
 }
 
@@ -349,6 +341,7 @@ const injectUI = () => {
   );
   // Should we even have an enable toggle? Being real, they can just disable the userscript.
   // And, if they accidentally disable it, they could be confused.
+  // Something like a "Debug Mode" toggle seems more useful, could replace it.
   const enableToggle = document.getElementById(
     "pl-enable-toggle",
   ) as HTMLInputElement | null;
