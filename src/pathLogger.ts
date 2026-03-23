@@ -31,6 +31,7 @@ window.__GPL_GAME_ID = null;
             );
             window.__WS_ROUND = data.duel.state.currentRoundNumber;
           }
+          // Might need to check for edge cases with reconnecting
           if (data.code === "DuelStarted") {
             console.log(
               "[PathLogger] Duel started! Game ID:",
@@ -444,9 +445,6 @@ const injectButton = () => {
   }
 };
 
-// Seems a bit heavy, especially since it is never disconnected, potential memory leak.
-// But, since it's an SPA, might be necessary.
-// But, it's fine for now.
 const uiObserver = new MutationObserver(injectButton);
 uiObserver.observe(document.body, { childList: true, subtree: true });
 
@@ -562,7 +560,7 @@ const decodePath = (encoded: string): google.maps.LatLng[] => {
 const markers: google.maps.Polyline[] = [];
 let inGame = false;
 let route: Point[][] = [];
-let mapState = 0;
+let mapState = "";
 let lastObservedSpawn: Point | null = null;
 
 const isGamePage = () => {
@@ -703,7 +701,6 @@ const onMove = (sv: google.maps.StreetViewPanorama) => {
 };
 
 const onMapUpdate = (map: google.maps.Map) => {
-  // Does it re-render path EVERY time an idle event occurs? This could be improved.
   const google = window.google;
   console.log("[PathLogger] map idle event triggered");
   if (!isGamePage()) {
@@ -713,13 +710,7 @@ const onMapUpdate = (map: google.maps.Map) => {
     console.log("Game page detected!");
   }
 
-  // Add Round Number to checksum to handle persistent Duel pages
-  // This seems a bit hard to understand, might be a cleaner way
-  const newState =
-    (inGame ? 5 : 0) +
-    (resultShown() ? 10 : 0) +
-    (isGameFinished() ? 20 : 0) +
-    getRoundNumber();
+  const newState = `${inGame}-${resultShown()}-${isGameFinished()}-${getRoundNumber()}`;
   if (newState === mapState) return;
   mapState = newState;
 

@@ -1,4 +1,3 @@
-
 declare global {
   interface Window {
     __GPL_GAME_ID: string | null;
