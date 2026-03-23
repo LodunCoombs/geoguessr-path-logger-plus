@@ -8,7 +8,6 @@ interface AppState {
   thickness: number;
 }
 
-// --- PART 1: IMMEDIATE EXECUTION (Websockets & UI) ---
 console.log("[PathLogger] Script Part 1: Immediate Execution started");
 window.__GPL_GAME_ID = null;
 
@@ -64,7 +63,7 @@ window.__GPL_GAME_ID = null;
 })();
 
 const SETTINGS_KEY = "pl_settings_v2";
-let state: AppState = {
+const DEFAULT_STATE: AppState = {
   enabled: true,
   style: "gradient",
   solidColor: "#ff0000",
@@ -74,13 +73,21 @@ let state: AppState = {
   thickness: 6,
 };
 
+let state: AppState = { ...DEFAULT_STATE };
+
 function loadSettings() {
-  const saved = localStorage.getItem(SETTINGS_KEY);
-  if (saved) state = { ...state, ...JSON.parse(saved) };
+  try {
+    const saved = localStorage.getItem(SETTINGS_KEY);
+    if (saved) state = { ...DEFAULT_STATE, ...JSON.parse(saved) };
+  } catch {
+    state = { ...DEFAULT_STATE };
+  }
 }
+
 function saveSettings() {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(state));
 }
+
 loadSettings();
 
 // --- Color Helpers ---
@@ -453,24 +460,6 @@ interface Point {
   lng: number;
 }
 
-const getSettings = (): AppState => {
-  const defaults: AppState = {
-    enabled: true,
-    style: "gradient",
-    solidColor: "#ff0000",
-    gradStart: "#22c55e",
-    gradMiddle: "#eab308",
-    gradEnd: "#ef4444",
-    thickness: 6,
-  };
-  try {
-    const saved = localStorage.getItem(SETTINGS_KEY);
-    return saved ? { ...defaults, ...JSON.parse(saved) } : defaults;
-  } catch {
-    return defaults;
-  }
-};
-
 const getDistMeters = (p1: Point, p2: Point) => {
   const R = 6371e3;
   const dLat = ((p2.lat - p1.lat) * Math.PI) / 180;
@@ -670,7 +659,7 @@ const getRoundNumber = () => {
 
 const onMove = (sv: google.maps.StreetViewPanorama) => {
   console.log("[PathLogger] onMove triggered from Panorama");
-  if (!getSettings().enabled || !isGamePage()) return;
+  if (!state.enabled || !isGamePage()) return;
 
   const lat = sv.getPosition()?.lat();
   const lng = sv.getPosition()?.lng();
@@ -738,7 +727,7 @@ const onMapUpdate = (map: google.maps.Map) => {
   markers.length = 0;
 
   if (resultShown()) {
-    const settings = getSettings();
+    const settings = state;
     const currentGameID = getGameID();
 
     // SAVE Logic
@@ -879,5 +868,4 @@ const setupMVCInterceptor = () => {
   }, 10);
 };
 
-// Begin waiting immediately
 setupMVCInterceptor();

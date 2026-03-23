@@ -13,5 +13,8 @@ We could even technically add UI to select what to log, and what not to log. Lik
 
 Simplified route means we don't get full gradients. Perhaps we can artificially increase the number of segments, to ensure full gradients every time.
 
-Potentially need to check for an element on the end of duel page, that shows the last round temporarily. Right now, might not be rendering last round of duel,
+Potential issue. Might need to check for an element on the end of duel page, that shows the last round temporarily. Right now, might not be rendering last round of duel,
 until you go into the game summary page.
+
+When we update the settings, we should update the paths that are currently drawn. Not just the paths that are drawn in the future. Basicaly, re-render paths on screen.
+For the edge case where they edit settings while viewing the results screen.
