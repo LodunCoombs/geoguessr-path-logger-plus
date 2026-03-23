@@ -617,21 +617,14 @@ const getGameID = () => {
     return window.__GPL_GAME_ID;
   }
   // Is this check necessary?
+  // Pretty sure our checks already cover singleplayer and duels.
   if (urlMatch) return urlMatch[0];
   return "unknown_game";
 };
 
 const getRoundNumber = () => {
-  // Within the div, the text looks like "1" " / " "5"
   const spEl = document.querySelector("[data-qa=round-number] :nth-child(2)");
   if (spEl) return parseInt(spEl.innerHTML);
-  const duelEl =
-    document.querySelector<HTMLElement>(
-      '[class*="round-score-2_roundNumber"]',
-    ) ||
-    // Should theoretically now fix the issue with not tracking round number in duels
-    document.querySelector<HTMLElement>('[class*="round-score_roundNumber"]');
-  if (duelEl) return parseInt(duelEl.innerText.replace(/\D/g, ""));
 
   if (window.__WS_ROUND) return window.__WS_ROUND;
 
@@ -680,7 +673,6 @@ const onMove = (sv: google.maps.StreetViewPanorama) => {
   const last = currentSeg[currentSeg.length - 1];
 
   if (last && getDistMeters(last, pos) > TELEPORT_DISTANCE) {
-    // Why push anything at all?
     route.push([]);
   }
   route[route.length - 1].push(pos);
