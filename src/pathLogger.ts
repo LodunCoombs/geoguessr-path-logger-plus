@@ -762,38 +762,61 @@ const onMapUpdate = (map: google.maps.Map) => {
       const raw = localStorage.getItem(k);
       if (raw) {
         const segs = (JSON.parse(raw) as string[]).map((x) => decodePath(x));
-        const total = segs.reduce((a, b) => a + b.length, 0);
-        let count = 0;
+        const totalSegments = segs.reduce((a, b) => a + (b.length - 1), 0);
+        const upscaleFactor = Math.max(1, Math.ceil(50 / (totalSegments || 1)));
+
+        let pointsDone = 0;
         segs.forEach((path) => {
-          const step = Math.max(2, Math.ceil(total / 100));
-          for (let i = 0; i < path.length - 1; i += step - 1) {
-            const chunk = path.slice(i, i + step);
-            const t = count / (total || 1);
-            const color =
-              settings.style === "solid"
-                ? settings.solidColor
-                : t < 0.5
-                  ? interpolateHSL(
-                      settings.gradStart,
-                      settings.gradMiddle,
-                      t * 2,
-                    )
-                  : interpolateHSL(
-                      settings.gradMiddle,
-                      settings.gradEnd,
-                      (t - 0.5) * 2,
+          for (let i = 0; i < path.length - 1; i++) {
+            const p1 = path[i];
+            const p2 = path[i + 1];
+
+            for (let j = 0; j < upscaleFactor; j++) {
+              const subP1 =
+                upscaleFactor === 1
+                  ? p1
+                  : google.maps.geometry.spherical.interpolate(
+                      p1,
+                      p2,
+                      j / upscaleFactor,
                     );
-            markers.push(
-              new google.maps.Polyline({
-                path: chunk,
-                strokeColor: color,
-                strokeWeight: settings.thickness,
-                geodesic: true,
-                zIndex: Math.floor(t * 100),
-                clickable: false,
-              }),
-            );
-            count += chunk.length - 1;
+              const subP2 =
+                upscaleFactor === 1
+                  ? p2
+                  : google.maps.geometry.spherical.interpolate(
+                      p1,
+                      p2,
+                      (j + 1) / upscaleFactor,
+                    );
+
+              const t = pointsDone / (totalSegments * upscaleFactor || 1);
+              const color =
+                settings.style === "solid"
+                  ? settings.solidColor
+                  : t < 0.5
+                    ? interpolateHSL(
+                        settings.gradStart,
+                        settings.gradMiddle,
+                        t * 2,
+                      )
+                    : interpolateHSL(
+                        settings.gradMiddle,
+                        settings.gradEnd,
+                        (t - 0.5) * 2,
+                      );
+
+              markers.push(
+                new google.maps.Polyline({
+                  path: [subP1, subP2],
+                  strokeColor: color,
+                  strokeWeight: settings.thickness,
+                  geodesic: true,
+                  zIndex: Math.floor(t * 100),
+                  clickable: false,
+                }),
+              );
+              pointsDone++;
+            }
           }
         });
       }
