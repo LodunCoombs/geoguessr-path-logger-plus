@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 import monkey from "vite-plugin-monkey";
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [
     monkey({
       entry: "src/pathLogger.ts",
@@ -20,4 +20,7 @@ export default defineConfig({
       },
     }),
   ],
-});
+  esbuild: {
+    drop: mode === "production" ? ["console", "debugger"] : [],
+  },
+}));
