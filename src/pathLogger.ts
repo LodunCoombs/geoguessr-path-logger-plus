@@ -553,6 +553,19 @@ const decodePath = (encoded: string): google.maps.LatLng[] => {
   return array;
 };
 
+const interpolatePath = (
+  p1: google.maps.LatLng,
+  p2: google.maps.LatLng,
+  fraction: number,
+): google.maps.LatLng => {
+  if (window.google?.maps?.geometry?.spherical) {
+    return window.google.maps.geometry.spherical.interpolate(p1, p2, fraction);
+  }
+  const lat = p1.lat() + (p2.lat() - p1.lat()) * fraction;
+  const lng = p1.lng() + (p2.lng() - p1.lng()) * fraction;
+  return new window.google.maps.LatLng(lat, lng);
+};
+
 // --- State Detection ---
 const markers: google.maps.Polyline[] = [];
 let inGame = false;
@@ -775,19 +788,11 @@ const onMapUpdate = (map: google.maps.Map) => {
               const subP1 =
                 upscaleFactor === 1
                   ? p1
-                  : google.maps.geometry.spherical.interpolate(
-                      p1,
-                      p2,
-                      j / upscaleFactor,
-                    );
+                  : interpolatePath(p1, p2, j / upscaleFactor);
               const subP2 =
                 upscaleFactor === 1
                   ? p2
-                  : google.maps.geometry.spherical.interpolate(
-                      p1,
-                      p2,
-                      (j + 1) / upscaleFactor,
-                    );
+                  : interpolatePath(p1, p2, (j + 1) / upscaleFactor);
 
               const t = pointsDone / (totalSegments * upscaleFactor || 1);
               const color =
