@@ -74,6 +74,7 @@ const DEFAULT_STATE: AppState = {
 
 let state: AppState = { ...DEFAULT_STATE };
 let capturedMap: google.maps.Map | null = null;
+let hasRenderedResult = "";
 
 function loadSettings() {
   try {
@@ -308,6 +309,7 @@ function updateUI() {
 
   saveSettings();
   mapState = "";
+  hasRenderedResult = "";
   if (capturedMap) onMapUpdate(capturedMap);
 }
 
@@ -430,7 +432,17 @@ const injectButton = () => {
   }
 };
 
-const uiObserver = new MutationObserver(injectButton);
+const uiObserver = new MutationObserver(() => {
+  injectButton();
+  if (resultShown() && capturedMap) {
+    const currentState = `true-${isGameFinished()}`;
+    if (hasRenderedResult !== currentState) {
+      setTimeout(() => {
+        if (capturedMap) onMapUpdate(capturedMap);
+      }, 200);
+    }
+  }
+});
 uiObserver.observe(document.body, { childList: true, subtree: true });
 
 // --- PART 2: MAP LOGIC ---
@@ -636,7 +648,9 @@ const getRoundNumber = () => {
 const onMove = (sv: google.maps.StreetViewPanorama) => {
   console.log("[PathLogger] onMove triggered from Panorama");
   const isMoving = sv.get("clickToGo") as boolean;
-  console.warn("isMoving", isMoving);
+  // Check if the log below says False when result screen is shown.
+  // If so, that's great. Since, we can simply not set inGame = true if isMoving is false.
+  console.warn(`Moving: ${isMoving}`);
   if (!isGamePage() || !isMoving) return;
 
   const lat = sv.getPosition()?.lat();
@@ -649,11 +663,10 @@ const onMove = (sv: google.maps.StreetViewPanorama) => {
     pos.lng.toFixed(5),
   );
 
-  // Result visible? Update spawn buffer.
+  // Result visible? Update spawn buffer but do not block, allowing the background movement to be recorded
   if (resultShown()) {
     lastObservedSpawn = pos;
     console.log("Reset Spawn Point, Results Screen Detected!");
-    return;
   }
 
   // Spectating? Stop.
@@ -689,14 +702,31 @@ const onMapUpdate = (map: google.maps.Map) => {
     console.log("Game page detected!");
   }
 
-  const newState = `${inGame}-${resultShown()}-${isGameFinished()}-${getRoundNumber()}`;
+  const actResultShown = resultShown();
+
+  if (actResultShown) {
+    const isFinished = isGameFinished();
+    const resultState = `${actResultShown}-${isFinished}`;
+
+    if (hasRenderedResult === resultState) {
+      console.log(
+        "[PathLogger] Already rendered this result state. Ignoring extra idle events.",
+      );
+      return;
+    }
+    hasRenderedResult = resultState;
+  } else {
+    hasRenderedResult = "";
+  }
+
+  const newState = `${inGame}-${actResultShown}-${isGameFinished()}-${getRoundNumber()}`;
   if (newState === mapState) return;
   mapState = newState;
 
   markers.forEach((m) => m.setMap(null));
   markers.length = 0;
 
-  if (resultShown()) {
+  if (actResultShown) {
     const settings = state;
     const currentGameID = getGameID();
 
