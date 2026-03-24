@@ -587,26 +587,13 @@ const isGamePage = () => {
 
 const resultShown = () => {
   // Single player, final summaries, etc.
-  if (document.querySelector('[data-qa="result-view-bottom"]')) {
-    console.log("Found result-view-bottom screen");
-    return true;
-  }
+  if (document.querySelector('[data-qa="result-view-bottom"]')) return true;
   // Duels Round Result
-  if (document.querySelector('[data-qa="round-result"]')) {
-    console.log("Found Round Result screen! Rendering path.");
-    return true;
-  }
+  if (document.querySelector('[data-qa="round-result"]')) return true;
   // Updated class fallback (Changed from round-score-2_root to round-score_root)
-  if (document.querySelector('[class*="round-score_root"]')) {
-    console.log(
-      "Couldn't find the data-qa, fell back to round-score_root class. Rendering path.",
-    );
+  if (document.querySelector('[class*="round-score_root"]')) return true;
+  if (location.href.includes("results") || location.href.includes("summary"))
     return true;
-  }
-  if (location.href.includes("results") || location.href.includes("summary")) {
-    console.log("Found results/summary page. Rendering path.");
-    return true;
-  }
   return false;
 };
 
@@ -740,6 +727,7 @@ const onMapUpdate = (map: google.maps.Map) => {
   markers.length = 0;
 
   if (actResultShown) {
+    console.log("[PathLogger] Result state detected! Rendering paths...");
     const settings = state;
     const currentGameID = getGameID();
 
